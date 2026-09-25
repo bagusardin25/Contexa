@@ -14,24 +14,32 @@ language.
 | Path | Contents |
 | --- | --- |
 | `apps/web` | Next.js 16 frontend: landing page and live session workspace |
-| `apps/api` | FastAPI backend: AssemblyAI streaming, translation, retrieval (planned) |
+| `apps/api` | FastAPI backend: AssemblyAI streaming tokens, translation, question detection, retrieval, grounded answers |
 | `PRD.md` | Product requirements |
 | `ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md` | Guardrails for the voice pipeline. Read before touching AssemblyAI code. |
 
 ## Status
 
 - [x] UI: landing page, session setup, live transcript, response copilot, document context, error states. Runs on a clearly labelled scripted preview.
-- [ ] Backend: FastAPI, short-lived AssemblyAI streaming tokens, LLM Gateway translation, question detection, and answers
-- [ ] Browser audio capture (tab or mic → PCM16 16 kHz) streaming to AssemblyAI
-- [ ] Document parsing, chunking, and retrieval (Supabase + pgvector, lexical fallback)
+- [x] Backend: FastAPI, short-lived AssemblyAI streaming tokens, LLM Gateway translation, question detection, and grounded answers
+- [x] Document parsing, chunking, and lexical (BM25) retrieval
+- [ ] Web app wired to the backend: browser audio capture (tab or mic → PCM16 16 kHz) streaming to AssemblyAI, live transport, document uploads
+- [ ] Persistence and semantic retrieval (Supabase + pgvector)
 - [ ] Deployment (Vercel for the web app, a WebSocket-capable host for the API)
 
-## Run the web app
+## Run locally
 
 ```bash
+# API (http://localhost:8000, docs at /docs)
+cd apps/api
+cp .env.example .env    # add ASSEMBLYAI_API_KEY
+uv sync
+uv run uvicorn app.main:app --reload --port 8000
+
+# Web app (http://localhost:3000)
 cd apps/web
 npm install
 npm run dev
 ```
 
-Then open http://localhost:3000. See [`apps/web/README.md`](apps/web/README.md) for details.
+See [`apps/api/README.md`](apps/api/README.md) and [`apps/web/README.md`](apps/web/README.md) for details.
