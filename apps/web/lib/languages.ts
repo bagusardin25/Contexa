@@ -1,7 +1,7 @@
 /**
  * Language catalogue and AssemblyAI model routing.
  *
- * Routing follows ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md §12–14:
+ * Routing follows docs/ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md §12–14:
  * the speech model is chosen by the language being *spoken*. Translating into
  * Indonesian is a text step after transcription and never needs Indonesian STT.
  */

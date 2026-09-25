@@ -58,8 +58,9 @@ Contexa/
 │       │   └── main.py         app factory
 │       ├── tests/              pytest suite (AssemblyAI mocked)
 │       └── .env.example
-├── PRD.md                      product requirements
-├── ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md
+├── docs/
+│   ├── PRD.md                  product requirements
+│   └── ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md
 │                               guardrails for the voice pipeline; read before touching AssemblyAI code
 └── README.md
 ```
@@ -114,4 +115,8 @@ cd apps/web && npm run lint && npm run build
 | Reasoning | AssemblyAI LLM Gateway with strict JSON-schema outputs; model set by `ASSEMBLYAI_LLM_MODEL` |
 | Retrieval | BM25 over document chunks (pgvector planned) |
 
-More detail: [`apps/web/README.md`](apps/web/README.md) and [`apps/api/README.md`](apps/api/README.md).
+## Documentation
+
+- [Product requirements](docs/PRD.md)
+- [AssemblyAI implementation and hackathon guide](docs/ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md)
+- [Web app](apps/web/README.md) and [API](apps/api/README.md)
