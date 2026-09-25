@@ -9,37 +9,109 @@ language.
 
 > Translation tells you what was said. Contexa helps you participate.
 
-## Repository
+## How it works
 
-| Path | Contents |
-| --- | --- |
-| `apps/web` | Next.js 16 frontend: landing page and live session workspace |
-| `apps/api` | FastAPI backend: AssemblyAI streaming tokens, translation, question detection, retrieval, grounded answers |
-| `PRD.md` | Product requirements |
-| `ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md` | Guardrails for the voice pipeline. Read before touching AssemblyAI code. |
+```text
+Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT
+        │                                   │
+        │◄────── partial + final turns ─────┘
+        │
+        └── final turns ──► Contexa API (FastAPI)
+                              ├─ translate + classify   (AssemblyAI LLM Gateway)
+                              ├─ retrieve evidence      (your uploaded documents)
+                              └─ grounded answer        (your language + ready-to-say)
+```
+
+- Audio goes from the browser straight to AssemblyAI with a short-lived token from the API.
+  The API key never reaches the browser.
+- Partial transcripts only update the screen. Translation, question detection, and retrieval
+  run on finished turns.
+- Each step fails on its own, so the live transcript keeps working if an answer fails.
+
+## Repository structure
+
+```text
+Contexa/
+├── apps/
+│   ├── web/                    Next.js 16 frontend
+│   │   ├── app/                routes: / (landing page), /session (live workspace)
+│   │   ├── components/
+│   │   │   ├── ui/             shadcn/ui-style primitives
+│   │   │   ├── landing/        landing page sections
+│   │   │   └── session/        workspace: setup, transcript, copilot, context, controls
+│   │   ├── hooks/              small client hooks
+│   │   ├── lib/
+│   │   │   ├── session/        transport contract, preview transport, Zustand store
+│   │   │   └── documents/      upload validation, uploader contract, sample docs
+│   │   └── types/              session types and the SessionEvent union
+│   └── api/                    FastAPI backend
+│       ├── app/
+│       │   ├── api/            REST routes and the WebSocket
+│       │   ├── assemblyai/     speech-model routing, streaming tokens
+│       │   ├── conversation/   final-turn pipeline (analysis → retrieval → answer)
+│       │   ├── documents/      upload validation, parsing, chunking
+│       │   ├── rag/            tokenizer and BM25 index
+│       │   ├── llm/            LLM Gateway client and prompts
+│       │   ├── models/         Pydantic contracts (API, events, LLM outputs)
+│       │   ├── store/          in-memory session store
+│       │   ├── config.py       settings from environment variables
+│       │   └── main.py         app factory
+│       ├── tests/              pytest suite (AssemblyAI mocked)
+│       └── .env.example
+├── PRD.md                      product requirements
+├── ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md
+│                               guardrails for the voice pipeline; read before touching AssemblyAI code
+└── README.md
+```
 
 ## Status
 
-- [x] UI: landing page, session setup, live transcript, response copilot, document context, error states. Runs on a clearly labelled scripted preview.
-- [x] Backend: FastAPI, short-lived AssemblyAI streaming tokens, LLM Gateway translation, question detection, and grounded answers
-- [x] Document parsing, chunking, and lexical (BM25) retrieval
-- [ ] Web app wired to the backend: browser audio capture (tab or mic → PCM16 16 kHz) streaming to AssemblyAI, live transport, document uploads
+- [x] Web UI: landing page, session setup, live transcript, response copilot, document context,
+      error states, light and dark themes
+- [x] API: streaming tokens, turn analysis (translation + question detection), document
+      parsing, BM25 retrieval, grounded answers, WebSocket protocol
+- [ ] Web app wired to the API. The UI still runs on a clearly labelled scripted preview;
+      next up are tab/mic capture, the live transport, and uploads to the API.
+- [ ] First end-to-end run against AssemblyAI with a real API key
 - [ ] Persistence and semantic retrieval (Supabase + pgvector)
-- [ ] Deployment (Vercel for the web app, a WebSocket-capable host for the API)
+- [ ] Deployment (Vercel for the web app, a WebSocket-capable host such as Render or Fly.io for the API)
 
 ## Run locally
 
+Requirements: Node.js 20.9+, Python 3.11+, and [uv](https://docs.astral.sh/uv/).
+
+Terminal 1, the API (http://localhost:8000, interactive docs at `/docs`):
+
 ```bash
-# API (http://localhost:8000, docs at /docs)
 cd apps/api
-cp .env.example .env    # add ASSEMBLYAI_API_KEY
+cp .env.example .env    # then set ASSEMBLYAI_API_KEY
 uv sync
 uv run uvicorn app.main:app --reload --port 8000
+```
 
-# Web app (http://localhost:3000)
+Terminal 2, the web app (http://localhost:3000):
+
+```bash
 cd apps/web
 npm install
 npm run dev
 ```
 
-See [`apps/api/README.md`](apps/api/README.md) and [`apps/web/README.md`](apps/web/README.md) for details.
+Checks:
+
+```bash
+cd apps/api && uv run pytest && uv run ruff check .
+cd apps/web && npm run lint && npm run build
+```
+
+## Tech stack
+
+| Layer | Choice |
+| --- | --- |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, Radix / shadcn/ui, Zustand |
+| Backend | FastAPI, Pydantic v2, httpx, pypdf, python-docx |
+| Speech | AssemblyAI Universal-3.5 Pro Realtime (`universal-3-5-pro`), Whisper Streaming (`whisper-rt`) for Indonesian |
+| Reasoning | AssemblyAI LLM Gateway with strict JSON-schema outputs; model set by `ASSEMBLYAI_LLM_MODEL` |
+| Retrieval | BM25 over document chunks (pgvector planned) |
+
+More detail: [`apps/web/README.md`](apps/web/README.md) and [`apps/api/README.md`](apps/api/README.md).
