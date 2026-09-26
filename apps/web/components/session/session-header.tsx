@@ -122,8 +122,8 @@ function PreviewMenu() {
       <DropdownMenuContent align="end" className="w-76">
         <DropdownMenuLabel className="font-normal leading-relaxed">
           <span className="mb-0.5 block font-medium text-foreground">UI preview mode</span>
-          The backend isn&apos;t connected yet, so sessions replay a scripted Q&amp;A. Use these to
-          check how the UI handles failures.
+          No API is connected (NEXT_PUBLIC_API_URL isn&apos;t set), so sessions replay a scripted
+          Q&amp;A. Use these to check how the UI handles failures.
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={status !== "listening"} onSelect={() => simulate("connection_drop")}>

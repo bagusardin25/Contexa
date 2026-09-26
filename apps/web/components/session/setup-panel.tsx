@@ -39,6 +39,7 @@ import {
 } from "@/lib/languages";
 import type { AudioSource, SessionError, SessionErrorCode } from "@/types/session";
 
+import { ApiStatus } from "./api-status";
 import { useIsPreview, useSession } from "./session-store-provider";
 
 const ERROR_TITLES: Record<SessionErrorCode, string> = {
@@ -95,7 +96,7 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
           </p>
         </header>
 
-        {isPreview ? <PreviewNotice /> : null}
+        {isPreview ? <PreviewNotice /> : <ApiStatus />}
 
         <div className="space-y-7 rounded-2xl border bg-card p-4 shadow-sm sm:p-6">
           <div className="space-y-2">
@@ -182,6 +183,7 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
                   {model.description} Speech is transcribed as spoken, then translated into{" "}
                   {LANGUAGES[config.displayLanguage].name}.
                 </p>
+                <KeytermSummary supported={speaker.model === "universal-3-5-pro"} />
               </div>
             </div>
           </section>
@@ -359,6 +361,32 @@ function ContextSummary({ onOpenContext }: { onOpenContext: () => void }) {
   );
 }
 
+/** AssemblyAI caps keyterms prompting at 100 terms per session. */
+const MAX_KEYTERMS = 100;
+
+function KeytermSummary({ supported }: { supported: boolean }) {
+  const count = useSession((state) => {
+    const terms = new Set<string>();
+    for (const doc of state.documents) {
+      if (doc.status !== "ready") continue;
+      for (const term of doc.keyterms) terms.add(term.toLowerCase());
+    }
+    return Math.min(MAX_KEYTERMS, terms.size);
+  });
+  if (count === 0) return null;
+
+  return (
+    <p className="text-muted-foreground">
+      <code className="mr-1.5 rounded bg-background/70 px-1 py-0.5 font-mono text-[11px]">
+        keyterms_prompt
+      </code>
+      {supported
+        ? `${pluralize(count, "term")} from your documents help AssemblyAI spell your project's names.`
+        : "Keyterms from your documents apply to Universal-3.5 Pro sessions only."}
+    </p>
+  );
+}
+
 function StartError({ error }: { error: SessionError }) {
   return (
     <div
@@ -379,11 +407,12 @@ function PreviewNotice() {
     <div className="mb-4 flex gap-3 rounded-xl border border-dashed border-primary/30 bg-primary/5 p-4 text-sm">
       <FlaskConicalIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
       <div className="space-y-1">
-        <p className="font-medium">UI preview: the backend isn&apos;t connected yet</p>
+        <p className="font-medium">UI preview: no API is connected</p>
         <p className="text-muted-foreground">
           Starting a session replays a scripted English or Japanese Q&amp;A with realistic timing so
-          every screen can be reviewed. Live AssemblyAI streaming replaces it in the next build
-          step. Load the sample documents first to see grounded answers.
+          every screen can be reviewed. Set{" "}
+          <code className="font-mono text-[12px]">NEXT_PUBLIC_API_URL</code> to run the live
+          AssemblyAI pipeline instead. Load the sample documents first to see grounded answers.
         </p>
       </div>
     </div>

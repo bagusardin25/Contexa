@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopy } from "@/hooks/use-copy";
+import { pluralize } from "@/lib/format";
 import { SPEECH_MODELS, speechModelFor } from "@/lib/languages";
 import { isSessionActive } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
@@ -94,6 +95,7 @@ export function ControlBar() {
 function AudioReadout({ className }: { className?: string }) {
   const audioSource = useSession((state) => state.config.audioSource);
   const speakerLanguage = useSession((state) => state.config.speakerLanguage);
+  const keyterms = useSession((state) => state.streamKeyterms);
   const model = SPEECH_MODELS[speechModelFor(speakerLanguage)];
 
   return (
@@ -105,6 +107,22 @@ function AudioReadout({ className }: { className?: string }) {
       </span>
       <span className="h-3 w-px bg-border" aria-hidden />
       <span className="hidden lg:inline">{model.shortName}</span>
+      {keyterms.length > 0 ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="hidden rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:inline"
+            >
+              {pluralize(keyterms.length, "keyterm")}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-80 text-left">
+            <p className="mb-1 font-medium">Sent to AssemblyAI as keyterms</p>
+            <p className="leading-relaxed opacity-90">{keyterms.join(" · ")}</p>
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
     </div>
   );
 }

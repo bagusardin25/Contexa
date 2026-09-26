@@ -3,13 +3,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 
-import { createUploader } from "@/lib/documents/uploader";
+import { createSessionServices } from "@/lib/session/services";
 import {
   createSessionStore,
   type SessionStore,
   type SessionStoreApi,
 } from "@/lib/session/store";
-import { createTransport, type SessionTransport } from "@/lib/session/transport";
+import type { SessionTransport } from "@/lib/session/transport";
 
 interface SessionContextValue {
   store: SessionStoreApi;
@@ -20,9 +20,9 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 
 export function SessionStoreProvider({ children }: { children: ReactNode }) {
   const [value] = useState<SessionContextValue>(() => {
-    const transport = createTransport();
+    const { transport, uploader } = createSessionServices();
     return {
-      store: createSessionStore({ transport, uploader: createUploader() }),
+      store: createSessionStore({ transport, uploader }),
       transportKind: transport.kind,
     };
   });

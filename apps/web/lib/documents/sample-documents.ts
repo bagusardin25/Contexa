@@ -15,6 +15,7 @@ export const SAMPLE_DOCUMENTS: ContextDocument[] = [
     chunkCount: 14,
     error: null,
     sample: true,
+    keyterms: ["Notewave", "Supabase Realtime", "PostgreSQL", "WebSocket"],
   },
   {
     id: "sample-readme",
@@ -26,6 +27,7 @@ export const SAMPLE_DOCUMENTS: ContextDocument[] = [
     chunkCount: 6,
     error: null,
     sample: true,
+    keyterms: ["Notewave", "Supabase", "Q4"],
   },
 ];
 

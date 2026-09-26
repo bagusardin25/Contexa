@@ -31,6 +31,8 @@ export interface SessionState {
   activeSuggestionId: string | null;
   documents: ContextDocument[];
   audioLevel: number;
+  /** Keyterms the live stream sent to AssemblyAI; empty in the preview. */
+  streamKeyterms: string[];
 }
 
 export interface RejectedFile {
@@ -47,8 +49,9 @@ export interface SessionActions {
   requestAnswer: (turnId?: string) => void;
   retryTranslation: (turnId: string) => void;
   selectSuggestion: (suggestionId: string) => void;
-  addFiles: (files: File[]) => RejectedFile[];
+  addFiles: (files: File[], options?: { sample?: boolean }) => RejectedFile[];
   addSampleDocuments: () => void;
+  retryDocument: (documentId: string) => void;
   removeDocument: (documentId: string) => void;
   simulate: (simulation: PreviewSimulation) => void;
 }
@@ -76,6 +79,7 @@ const EMPTY_SESSION = {
   suggestionOrder: [],
   activeSuggestionId: null,
   audioLevel: 0,
+  streamKeyterms: [],
 } satisfies Omit<SessionState, "config" | "documents">;
 
 const UNKNOWN_ERROR: SessionError = {
@@ -143,6 +147,12 @@ export function applyEvent(
 
     case "turn_partial":
       return { partial: event.turn };
+
+    case "turn_discarded":
+      return state.partial?.id === event.turnId ? { partial: null } : {};
+
+    case "keyterms_applied":
+      return { streamKeyterms: event.keyterms };
 
     case "turn_final": {
       const final = event.turn;
@@ -292,7 +302,7 @@ export function createSessionStore({
 
     selectSuggestion: (suggestionId) => set({ activeSuggestionId: suggestionId }),
 
-    addFiles: (files) => {
+    addFiles: (files, options) => {
       const rejected: RejectedFile[] = [];
       const accepted: { doc: ContextDocument; file: File }[] = [];
       for (const file of files) {
@@ -313,7 +323,8 @@ export function createSessionStore({
             progress: 0,
             chunkCount: null,
             error: null,
-            sample: false,
+            sample: options?.sample ?? false,
+            keyterms: [],
           },
         });
       }
@@ -335,6 +346,8 @@ export function createSessionStore({
         const missing = SAMPLE_DOCUMENTS.filter((doc) => !present.has(doc.id));
         return { documents: [...state.documents, ...missing] };
       }),
+
+    retryDocument: (documentId) => uploader.retry?.(documentId),
 
     removeDocument: (documentId) => {
       uploader.cancel(documentId);

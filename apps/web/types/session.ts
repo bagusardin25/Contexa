@@ -150,6 +150,8 @@ export interface ContextDocument {
   chunkCount: number | null;
   error: string | null;
   sample: boolean;
+  /** Distinctive terms found in the document, sent to AssemblyAI as keyterms. */
+  keyterms: string[];
 }
 
 /**
@@ -160,7 +162,11 @@ export type SessionEvent =
   | { type: "status"; status: SessionStatus; error?: SessionError }
   | { type: "audio_level"; level: number }
   | { type: "turn_partial"; turn: PartialTurn }
+  /** A turn ended with no words (noise); its partial is dropped. */
+  | { type: "turn_discarded"; turnId: string }
   | { type: "turn_final"; turn: FinalTurnPayload }
+  /** The keyterms the live stream is using (keyterms prompting). */
+  | { type: "keyterms_applied"; keyterms: string[] }
   | {
       type: "translation_done";
       turnId: string;
