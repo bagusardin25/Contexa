@@ -78,8 +78,9 @@ How it fits together:
   re-uploaded, and manual requests re-send their turn first.
 - `LiveUploader` (`lib/documents/live-uploader.ts`) posts files with the browser's document id,
   reports upload progress, shows each document's keyterms, and supports Retry.
-- The setup screen checks `/health` first and says when the API is unreachable or has no
-  AssemblyAI key. **Load sample project docs** uploads the real files in `public/samples/`.
+- The setup screen checks `/health` first: it names the LLM provider and models in use, and says
+  when the API is unreachable, has no AssemblyAI key, or has no LLM configured (the transcript
+  still works then). **Load sample project docs** uploads the real files in `public/samples/`.
 
 ## Preview mode
 

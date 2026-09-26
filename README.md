@@ -17,9 +17,9 @@ Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT (Universa
         │◄────── partial + final turns ┘
         │
         └── final turns ──► Contexa API (FastAPI)
-                              ├─ translate + classify   (LLM Gateway, fast model)
+                              ├─ translate + classify   (LLM, fast model)
                               ├─ retrieve evidence      (BM25 over your documents)
-                              └─ grounded answer        (LLM Gateway: your language + ready-to-say)
+                              └─ grounded answer        (LLM: your language + ready-to-say)
 ```
 
 - Audio goes from the browser straight to AssemblyAI with a short-lived token from the API.
@@ -29,6 +29,9 @@ Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT (Universa
   Adding or removing a document mid-session updates the stream without reconnecting.
 - Partial transcripts only update the screen. Translation, question detection, and retrieval
   run on finished turns; the per-turn analysis uses a fast model, answers a stronger one.
+- Speech always runs on AssemblyAI. The LLM is your choice: the AssemblyAI LLM Gateway, or any
+  OpenAI-compatible API (Groq, OpenRouter, Gemini, OpenAI, a local server), so the whole app
+  runs on free tiers.
 - Each step fails on its own, so the live transcript keeps working if an answer fails.
 
 ## Repository structure
@@ -64,7 +67,7 @@ Contexa/
 │       │   ├── conversation/   final-turn pipeline (analysis → retrieval → answer)
 │       │   ├── documents/      upload validation, parsing, chunking, keyterms
 │       │   ├── rag/            tokenizer and BM25 index
-│       │   ├── llm/            LLM Gateway client and prompts
+│       │   ├── llm/            LLM client (LLM Gateway or OpenAI-compatible) and prompts
 │       │   ├── models/         Pydantic contracts (API, events, LLM outputs)
 │       │   ├── store/          in-memory session store
 │       │   ├── config.py       settings from environment variables
@@ -90,7 +93,9 @@ Contexa/
 - [x] Web app wired to the API: tab and microphone capture, AssemblyAI streaming, document
       uploads, keyterms from documents, live translations and answers, reconnects and recovery.
       Without `NEXT_PUBLIC_API_URL` the UI runs a clearly labelled scripted preview.
-- [ ] First run against AssemblyAI with a real API key (the smoke test below checks each call)
+- [x] LLM provider of your choice: AssemblyAI LLM Gateway, Groq, OpenRouter, Gemini, OpenAI, or
+      any OpenAI-compatible API, with fallbacks for models without structured outputs
+- [ ] First run with real keys (the smoke test below checks each call)
 - [ ] Persistence and semantic retrieval (Supabase + pgvector)
 - [ ] Deployment (Vercel for the web app, a WebSocket-capable host such as Render or Fly.io for the API)
 
@@ -101,22 +106,35 @@ on a computer for tab audio (the microphone works in any modern browser).
 
 ### 1. Configure the API: `apps/api/.env`
 
-Copy `apps/api/.env.example` to `apps/api/.env` and fill it in.
+Copy `apps/api/.env.example` to `apps/api/.env` and fill it in. Two keys are needed: one for
+speech (AssemblyAI) and one for the LLM that translates and answers.
 
-| Variable | Default | What it does |
+| Variable | Example | What it does |
 | --- | --- | --- |
-| `ASSEMBLYAI_API_KEY` | (required) | Your AssemblyAI key. Server-side only; the browser gets short-lived tokens. |
-| `ASSEMBLYAI_LLM_MODEL` | `claude-sonnet-4-6` | Grounded answers. |
-| `ASSEMBLYAI_LLM_FAST_MODEL` | `claude-haiku-4-5` | Translation and question detection on every turn. Empty = use the main model. |
+| `ASSEMBLYAI_API_KEY` | (required) | Your AssemblyAI key, for speech-to-text. Server-side only; the browser gets short-lived tokens. |
+| `LLM_PROVIDER` | `groq` | Who translates, detects questions, and answers: `groq`, `openrouter`, `gemini`, `openai`, `custom` (any OpenAI-compatible API, with `LLM_BASE_URL`), or `assemblyai` (the LLM Gateway). |
+| `LLM_API_KEY` | (required) | That provider's key. Not used for `assemblyai`, which uses `ASSEMBLYAI_API_KEY`. |
+| `LLM_MODEL` | `openai/gpt-oss-120b` | Grounded answers. |
+| `LLM_FAST_MODEL` | `openai/gpt-oss-20b` | Translation and question detection on every turn. Empty = `LLM_MODEL`. |
+| `LLM_REASONING_EFFORT` | `low` | For reasoning models: faster replies, fewer tokens. Empty = provider default. |
 | `CORS_ORIGINS` | `http://localhost:3000` | Web app origins allowed for HTTP and the WebSocket, comma-separated. `localhost` and `127.0.0.1` are different origins. |
 
 Optional tuning: `STREAMING_TOKEN_TTL_SECONDS` (60), `STREAMING_MAX_SESSION_SECONDS` (3600),
-`STREAMING_TOKENS_PER_SESSION` (30), `LLM_TIMEOUT_SECONDS` (15), `MAX_UPLOAD_BYTES` (10 MB).
+`STREAMING_TOKENS_PER_SESSION` (30), `LLM_TIMEOUT_SECONDS` (15), `MAX_UPLOAD_BYTES` (10 MB),
+`LLM_BASE_URL` (required for `custom`, e.g. `http://localhost:11434/v1` for Ollama).
 
-> **The LLM Gateway isn't part of AssemblyAI's free plan.** Free credits cover speech-to-text
-> (Universal-3.5 Pro Realtime included), but translation, question detection, and answers call
-> the LLM Gateway, which needs a payment method on the account. Without it, the transcript still
-> works and every translation and answer shows the gateway's refusal.
+> **Free setup.** AssemblyAI's free credits cover speech-to-text (Universal-3.5 Pro Realtime
+> included) but not the LLM Gateway, so on a free account point the LLM at a free tier.
+> Each finished turn is one LLM request, plus one per answered question.
+>
+> | Provider | Free tier (Sept 2026) | Setup |
+> | --- | --- | --- |
+> | Groq (recommended) | About 30 requests/min and 1,000/day per model (8,000 tokens/min on gpt-oss-120b); no card | Key at console.groq.com; the `.env.example` defaults |
+> | OpenRouter | 20 requests/min, 50/day across `:free` models (1,000/day after a one-time $10 credit purchase) | `LLM_PROVIDER=openrouter`, `LLM_MODEL=openrouter/free` (or a `:free` id from the smoke test), empty `LLM_FAST_MODEL` |
+> | Gemini | Per model, e.g. about 15/min and 1,000/day on 2.5 Flash-Lite, 10/min and 250/day on 2.5 Flash | `LLM_PROVIDER=gemini`, `LLM_MODEL=gemini-2.5-flash`, `LLM_FAST_MODEL=gemini-2.5-flash-lite`, empty `LLM_REASONING_EFFORT` |
+>
+> With a paid AssemblyAI account, `LLM_PROVIDER=assemblyai` uses the LLM Gateway
+> (`claude-sonnet-4-6` for answers, `claude-haiku-4-5` per turn; override with `LLM_MODEL`).
 
 ### 2. Configure the web app: `apps/web/.env.local`
 
@@ -145,7 +163,7 @@ npm install
 npm run dev
 ```
 
-### 4. Check every AssemblyAI call once
+### 4. Check every external call once
 
 ```bash
 cd apps/api
@@ -154,8 +172,9 @@ uv run python -m scripts.smoke_assemblyai --wav question.wav # a 16 kHz mono WAV
 ```
 
 It mints a streaming token, opens a short stream on each speech model (with keyterms on
-Universal-3.5 Pro), lists the LLM Gateway models, and runs one turn analysis and one grounded
-answer with the configured models. Each failure prints AssemblyAI's reason and a next step.
+Universal-3.5 Pro), lists the LLM provider's models (the current `:free` ones on OpenRouter),
+and runs one turn analysis and one grounded answer with the configured models. Each failure
+prints the provider's reason and a next step.
 To make the WAV, record a question with any app and convert it:
 `ffmpeg -i question.m4a -ar 16000 -ac 1 -sample_fmt s16 question.wav`.
 
@@ -163,7 +182,8 @@ To make the WAV, record a question with any app and convert it:
 
 Open http://localhost:3000/session in Chrome or Edge.
 
-1. The setup screen says **Connected to the Contexa API** (otherwise it says what's wrong).
+1. The setup screen says **Connected to the Contexa API** and names the LLM provider and
+   models (otherwise it says what's wrong).
 2. **Load sample project docs** (or drop your own PDF, DOCX, Markdown, or TXT): each file turns
    *Ready* with its chunk count and the keyterms sent to AssemblyAI.
 3. Pick **Microphone**, press **Start listening**, and ask: *"How does your app handle concurrent
@@ -176,19 +196,22 @@ Open http://localhost:3000/session in Chrome or Edge.
    **Export .md** downloads the transcript; **New session** keeps the documents.
 
 Failure handling worth trying: stop the API (red banner, clear upload and start errors, both
-retryable once it's back), empty `ASSEMBLYAI_API_KEY` (warning banner), block the microphone,
-or share a tab without audio. The transcript keeps running when a translation or answer fails,
-and each failure has a Retry.
+retryable once it's back), empty `ASSEMBLYAI_API_KEY` or `LLM_API_KEY` (warning banner; the
+transcript still works without an LLM), block the microphone, or share a tab without audio. The
+transcript keeps running when a translation or answer fails, and each failure has a Retry.
 
 ### Troubleshooting
 
 | Symptom | Cause and fix |
 | --- | --- |
-| Translations and answers fail with HTTP 401/402/403 from the LLM Gateway | The account is on the free plan. Add a payment method in the AssemblyAI dashboard. |
+| Translations and answers fail with HTTP 401/402/403 from the AssemblyAI LLM Gateway | The AssemblyAI account is on the free plan. Set `LLM_PROVIDER` to a free tier (Groq, OpenRouter, Gemini) or add a payment method. |
+| Translations fail with HTTP 401/403 from Groq, OpenRouter, Gemini, or OpenAI | `LLM_API_KEY` is wrong or for another provider. |
+| Some turns fail with HTTP 429 | A free-tier rate limit: requests or tokens per minute, or the daily cap. One retry is automatic; keep `LLM_REASONING_EFFORT=low`, use a smaller `LLM_FAST_MODEL`, or wait. |
+| "The model used up its token budget" | A reasoning model spent its tokens thinking. Set `LLM_REASONING_EFFORT=low` or pick a non-reasoning model. |
 | "Can't reach the Contexa API" | The API isn't running, `NEXT_PUBLIC_API_URL` points elsewhere, or `CORS_ORIGINS` doesn't list the page's origin. |
 | "AssemblyAI didn't start the stream" | The reason is shown; code 1006 usually means a bad key or no balance. Run the smoke test. |
 | No audio from a shared tab | Share a tab (not a window) in Chrome or Edge with **Share tab audio** on. Firefox and Safari can't share tab audio: use the microphone. |
-| A model id is rejected | The smoke test lists the gateway's model ids; set `ASSEMBLYAI_LLM_MODEL` / `ASSEMBLYAI_LLM_FAST_MODEL` to one of them. |
+| A model id is rejected | The smoke test lists the provider's model ids; set `LLM_MODEL` / `LLM_FAST_MODEL` to one of them. OpenRouter's `:free` models change over time. |
 
 ### Checks
 
@@ -204,7 +227,7 @@ cd apps/web && npm run lint && npm run build
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, Radix / shadcn/ui, Zustand |
 | Backend | FastAPI, Pydantic v2, httpx, pypdf, python-docx |
 | Speech | AssemblyAI Universal-3.5 Pro Realtime (`universal-3-5-pro`) with speaker labels and keyterms prompting; Whisper Streaming (`whisper-rt`) for Indonesian |
-| Reasoning | AssemblyAI LLM Gateway with strict JSON-schema outputs: `ASSEMBLYAI_LLM_FAST_MODEL` per turn, `ASSEMBLYAI_LLM_MODEL` for answers |
+| Reasoning | Any OpenAI-compatible LLM (Groq, OpenRouter, Gemini, OpenAI) or the AssemblyAI LLM Gateway, with strict JSON-schema outputs and fallbacks: `LLM_FAST_MODEL` per turn, `LLM_MODEL` for answers |
 | Retrieval | BM25 over document chunks (pgvector planned) |
 | Auth | Supabase Auth via `@supabase/ssr`: Google OAuth and email/password, PKCE, cookie sessions |
 
