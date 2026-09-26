@@ -1,0 +1,10 @@
+# Secrets stay out of the image: hosts pass settings as environment variables.
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+tests/
