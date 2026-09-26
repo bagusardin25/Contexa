@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, Request
@@ -27,11 +28,16 @@ async def connect_database(settings: Settings) -> Database | None:
     the API runs without it rather than failing to start."""
     if settings.database_url is None or not settings.database_url.get_secret_value().strip():
         return None
-    database = Database(settings.database_url.get_secret_value().strip())
+    dsn = settings.database_url.get_secret_value().strip()
+    database = Database(dsn)
     try:
         await database.connect()
     except Exception as exc:  # noqa: BLE001 - any failure means "no history", never a crash
-        logger.error("history is off: couldn't set up the database (%s)", type(exc).__name__)
+        reason = f"{type(exc).__name__}: {exc}"
+        password = urlsplit(dsn).password
+        if password:
+            reason = reason.replace(password, "[redacted]")
+        logger.error("history is off: couldn't set up the database (%s)", reason)
         await database.close()
         return None
     return database

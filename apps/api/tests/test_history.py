@@ -122,14 +122,18 @@ def test_history_is_off_without_a_database(fake_llm: FakeLLM, fake_tokens: FakeT
 
 
 def test_an_unreachable_database_turns_history_off(
-    fake_llm: FakeLLM, fake_tokens: FakeTokens
+    fake_llm: FakeLLM, fake_tokens: FakeTokens, caplog: pytest.LogCaptureFixture
 ) -> None:
     # Nothing listens on port 1: the API still starts, without history.
-    dsn = "postgresql://postgres@127.0.0.1:1/postgres"
+    dsn = "postgresql://postgres:hunter2-secret@127.0.0.1:1/postgres"
     with build_client(fake_llm, fake_tokens, database_url=dsn) as client:
         health = client.get("/health").json()
         assert health["status"] == "ok" and health["historyEnabled"] is False
         assert client.get("/api/meetings", headers=DEVICE_A).status_code == 503
+    # The log says why, without the password.
+    logged = [r.getMessage() for r in caplog.records if "history is off" in r.getMessage()]
+    assert len(logged) == 1 and "Error" in logged[0]
+    assert "hunter2-secret" not in caplog.text
 
 
 def test_cors_allows_the_history_headers_and_put(
