@@ -25,11 +25,13 @@
   --input: oklch(0.9 0.008 286);
   --ring: oklch(0.6 0.18 277);
 
-  /* Contexa semantic colors */
+  /* Contexa semantic colors. *-foreground variants are for small text (4.5:1). */
   --live: oklch(0.62 0.24 25);
+  --live-foreground: oklch(0.52 0.2 25);
   --question: oklch(0.72 0.16 65);
   --question-foreground: oklch(0.47 0.13 55);
   --translation: oklch(0.6 0.13 200);
+  --translation-foreground: oklch(0.52 0.1 200);
   --success: oklch(0.58 0.15 155);
   --warning: oklch(0.7 0.16 70);
 }
@@ -55,9 +57,11 @@
   --ring: oklch(0.62 0.16 277);
 
   --live: oklch(0.68 0.22 25);
+  --live-foreground: oklch(0.68 0.22 25);
   --question: oklch(0.8 0.15 72);
   --question-foreground: oklch(0.85 0.13 78);
   --translation: oklch(0.76 0.12 200);
+  --translation-foreground: oklch(0.76 0.12 200);
   --success: oklch(0.74 0.15 155);
   --warning: oklch(0.82 0.15 78);
 }
@@ -88,9 +92,11 @@
   --color-ring: var(--ring);
 
   --color-live: var(--live);
+  --color-live-foreground: var(--live-foreground);
   --color-question: var(--question);
   --color-question-foreground: var(--question-foreground);
   --color-translation: var(--translation);
+  --color-translation-foreground: var(--translation-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
 
@@ -145,5 +151,84 @@
 
   ::selection {
     background: color-mix(in oklab, var(--primary) 25%, transparent);
+  }
+}
+
+/*
+ * Landing hero demo (components/landing/live-turn-demo.tsx).
+ * The markup is the finished state. The timeline below only runs when motion
+ * is allowed; each step reads its start offset from --at.
+ */
+@keyframes demo-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes demo-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes demo-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@keyframes demo-finalize {
+  from {
+    color: var(--muted-foreground);
+  }
+}
+
+@keyframes demo-caret {
+  from,
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:has(.landing) {
+    scroll-behavior: smooth;
+  }
+
+  .live-demo [data-reveal] {
+    animation: demo-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) var(--at, 0s) both;
+  }
+
+  .live-demo [data-word] {
+    position: relative;
+    animation: demo-fade 0.2s ease-out var(--at, 0s) both;
+  }
+
+  /* The caret rides on the newest word until the turn is final (--for). */
+  .live-demo [data-word]::after {
+    content: "";
+    position: absolute;
+    inset-block: 0.15em;
+    inset-inline-end: -3px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--primary);
+    opacity: 0;
+    animation: demo-caret var(--for, 0.1s) steps(1) var(--at, 0s);
+  }
+
+  .live-demo [data-final] {
+    animation: demo-finalize 0.35s ease-out var(--at, 0s) both;
+  }
+
+  .live-demo [data-hide] {
+    animation: demo-out 0.2s ease-in var(--at, 0s) forwards;
+  }
+
+  .live-demo[data-paused] *,
+  .live-demo[data-paused] *::after {
+    animation-play-state: paused !important;
   }
 }
