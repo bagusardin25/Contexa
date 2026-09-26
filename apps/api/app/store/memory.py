@@ -10,7 +10,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from app.assemblyai.routing import speech_model_for
+from app.assemblyai.routing import speech_model_for, supports_keyterms
+from app.documents.keyterms import merge_keyterms
 from app.models.session import (
     DocumentKind,
     DocumentOut,
@@ -38,6 +39,7 @@ class DocumentRecord:
     status: str
     chunk_count: int | None = None
     error: str | None = None
+    keyterms: list[str] = field(default_factory=list)
 
     def to_out(self) -> DocumentOut:
         return DocumentOut(
@@ -48,6 +50,7 @@ class DocumentRecord:
             status="ready" if self.status == "ready" else "failed",
             chunk_count=self.chunk_count,
             error=self.error,
+            keyterms=self.keyterms,
         )
 
 
@@ -89,6 +92,22 @@ class SessionState:
         position = next((i for i, t in enumerate(ordered) if t.id == turn_id), len(ordered))
         return ordered[max(0, position - limit) : position]
 
+    def keyterms(self) -> list[str]:
+        """The keyterms_prompt for the next stream, from the ready documents."""
+        if not supports_keyterms(speech_model_for(self.config.speaker_language)):
+            return []
+        return merge_keyterms(
+            [doc.keyterms for doc in self.documents.values() if doc.status == "ready"]
+        )
+
+    def reset(self) -> None:
+        """A new conversation in the same session: documents and their index stay."""
+        self.turns.clear()
+        self.suggestions.clear()
+        self.ended_at = None
+        self.tokens_issued = 0
+        self.touch()
+
     def to_out(self) -> SessionOut:
         return SessionOut(
             id=self.id,
@@ -98,6 +117,7 @@ class SessionState:
             ended_at=self.ended_at,
             documents=[doc.to_out() for doc in self.documents.values()],
             turn_count=len(self.turns),
+            keyterms=self.keyterms(),
         )
 
 

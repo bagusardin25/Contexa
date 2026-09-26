@@ -26,25 +26,36 @@ def test_speech_model_routing(language: str, model: str) -> None:
 
 def test_streaming_params_and_url() -> None:
     config = SessionConfig(speaker_language="ja", speaker_labels=True)
-    url = websocket_url("wss://streaming.assemblyai.com/v3/ws", config, "tok en")
+    url = websocket_url(
+        "wss://streaming.assemblyai.com/v3/ws", config, "tok en", ["Supabase", "Next.js"]
+    )
     parsed = urlparse(url)
     query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
 
     assert parsed.netloc == "streaming.assemblyai.com" and parsed.path == "/v3/ws"
+    # Universal-3.5 Pro always formats turns, so format_turns isn't sent (migration guide).
     assert query == {
         "speech_model": "universal-3-5-pro",
         "sample_rate": "16000",
         "encoding": "pcm_s16le",
-        "format_turns": "true",
         "speaker_labels": "true",
+        "keyterms_prompt": '["Supabase", "Next.js"]',
         "token": "tok en",
     }
+    assert json.loads(query["keyterms_prompt"]) == ["Supabase", "Next.js"]
 
 
-def test_whisper_gets_no_language_or_speaker_hints() -> None:
-    params = streaming_params(SessionConfig(speaker_language="id", speaker_labels=True))
+def test_universal_without_keyterms_sends_no_keyterms_prompt() -> None:
+    params = streaming_params(SessionConfig(speaker_language="en", speaker_labels=False))
+    assert "keyterms_prompt" not in params and "speaker_labels" not in params
+
+
+def test_whisper_gets_no_language_speaker_or_keyterm_hints() -> None:
+    config = SessionConfig(speaker_language="id", speaker_labels=True)
+    params = streaming_params(config, ["Supabase"])
     assert params["speech_model"] == "whisper-rt"
-    assert "speaker_labels" not in params and "language" not in params
+    assert params["format_turns"] == "true"
+    assert not {"speaker_labels", "language", "keyterms_prompt"} & params.keys()
 
 
 def test_parse_json_content_variants() -> None:

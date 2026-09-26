@@ -1,3 +1,4 @@
+import json
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -262,6 +263,128 @@ def test_socket_rejects_foreign_origins_and_unknown_sessions(client: TestClient)
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/ws/sessions/ses_missing", headers={"origin": ORIGIN}):
             pass
+
+
+TECH_README = b"""# Notewave
+
+Notes sync through a WebSocket to FastAPI, and the Supabase client stores them in
+PostgreSQL with `pgvector` for search.
+"""
+
+
+def stream_query(client: TestClient, session_id: str) -> tuple[dict[str, Any], dict[str, str]]:
+    body = client.post(f"/api/sessions/{session_id}/stream-token").json()
+    return body, {k: v[0] for k, v in parse_qs(urlparse(body["websocketUrl"]).query).items()}
+
+
+def test_update_session_changes_only_what_was_sent(client: TestClient) -> None:
+    session_id = create_session(client, title="Demo", speakerLanguage="en")
+    body = client.patch(
+        f"/api/sessions/{session_id}", json={"speakerLanguage": "ja", "displayLanguage": "en"}
+    ).json()
+    assert body["config"] == {
+        "title": "Demo",
+        "speakerLanguage": "ja",
+        "displayLanguage": "en",
+        "responseLanguage": "auto",
+        "speakerLabels": True,
+    }
+    assert body["speechModel"] == "universal-3-5-pro"
+    assert (
+        client.patch(f"/api/sessions/{session_id}", json={"displayLanguage": "fr"}).status_code
+        == 422
+    )
+    assert client.patch("/api/sessions/ses_missing", json={}).status_code == 404
+
+
+def test_patch_is_allowed_by_cors(client: TestClient) -> None:
+    response = client.options(
+        "/api/sessions/anything",
+        headers={
+            "origin": ORIGIN,
+            "access-control-request-method": "PATCH",
+            "access-control-request-headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert "PATCH" in response.headers["access-control-allow-methods"]
+
+
+def test_reset_clears_the_conversation_but_keeps_documents(
+    client: TestClient, fake_llm: FakeLLM
+) -> None:
+    fake_llm.responses["turn_analysis"] = STATEMENT_ANALYSIS
+    session_id = create_session(client)
+    upload(client, session_id, "README.md", README)
+    with client.websocket_connect(f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}) as ws:
+        ws.send_json(turn("t1", "Welcome back."))
+        receive_until(ws, "turn_classified")
+    client.post(f"/api/sessions/{session_id}/end")
+    assert client.post(f"/api/sessions/{session_id}/stream-token").status_code == 409
+
+    body = client.post(f"/api/sessions/{session_id}/reset").json()
+    assert body["turnCount"] == 0 and body["endedAt"] is None
+    assert [d["name"] for d in body["documents"]] == ["README.md"]
+    assert client.get(f"/api/sessions/{session_id}/turns").json() == {
+        "turns": [],
+        "suggestions": [],
+    }
+    assert client.post(f"/api/sessions/{session_id}/stream-token").status_code == 200
+
+    # The same turn id is accepted again in the new conversation.
+    with client.websocket_connect(f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}) as ws:
+        ws.send_json(turn("t1", "Welcome back."))
+        receive_until(ws, "turn_classified")
+    assert client.get(f"/api/sessions/{session_id}").json()["turnCount"] == 1
+
+
+def test_upload_uses_the_client_document_id(client: TestClient) -> None:
+    session_id = create_session(client)
+    url = f"/api/sessions/{session_id}/documents"
+    first = client.post(url, files={"file": ("README.md", README)}, data={"documentId": "doc-a1-1"})
+    assert first.status_code == 201 and first.json()["id"] == "doc-a1-1"
+
+    duplicate = client.post(url, files={"file": ("x.md", README)}, data={"documentId": "doc-a1-1"})
+    assert duplicate.status_code == 409
+    invalid = client.post(url, files={"file": ("x.md", README)}, data={"documentId": "bad id!"})
+    assert invalid.status_code == 422
+
+    with client.websocket_connect(f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}) as ws:
+        ws.send_json(turn("t1", "How do you handle concurrent updates?"))
+        evidence = receive_until(ws, "suggestion_evidence")[-1]["evidence"]
+    assert evidence[0]["documentId"] == "doc-a1-1"
+    assert evidence[0]["chunkId"].startswith("doc-a1-1:")
+    assert client.delete(f"{url}/doc-a1-1").status_code == 204
+
+
+def test_document_keyterms_reach_the_streaming_url(client: TestClient) -> None:
+    session_id = create_session(client, speakerLanguage="en")
+    document = upload(client, session_id, "notes.md", TECH_README).json()
+    assert {"WebSocket", "FastAPI", "Supabase", "PostgreSQL", "pgvector"} <= set(
+        document["keyterms"]
+    )
+
+    session = client.get(f"/api/sessions/{session_id}").json()
+    assert session["keyterms"] == document["keyterms"]
+
+    body, query = stream_query(client, session_id)
+    assert body["keyterms"] == document["keyterms"]
+    assert json.loads(query["keyterms_prompt"]) == document["keyterms"]
+    assert "format_turns" not in query
+
+    # Removing the document removes its terms from the next stream.
+    client.delete(f"/api/sessions/{session_id}/documents/{document['id']}")
+    body, query = stream_query(client, session_id)
+    assert body["keyterms"] == [] and "keyterms_prompt" not in query
+
+
+def test_whisper_sessions_send_no_keyterms(client: TestClient) -> None:
+    session_id = create_session(client, speakerLanguage="id")
+    assert upload(client, session_id, "notes.md", TECH_README).json()["keyterms"]
+    assert client.get(f"/api/sessions/{session_id}").json()["keyterms"] == []
+    body, query = stream_query(client, session_id)
+    assert body["speechModel"] == "whisper-rt" and body["keyterms"] == []
+    assert "keyterms_prompt" not in query and query["format_turns"] == "true"
 
 
 def test_answer_endpoint(client: TestClient) -> None:

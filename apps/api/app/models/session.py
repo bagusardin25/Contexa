@@ -22,6 +22,19 @@ class SessionConfig(CamelModel):
     speaker_labels: bool = True
 
 
+class SessionConfigUpdate(CamelModel):
+    """Partial update: only the fields sent are changed."""
+
+    title: str | None = Field(None, max_length=80)
+    speaker_language: SpeakerLanguage | None = None
+    display_language: LanguageCode | None = None
+    response_language: LanguageCode | Literal["auto"] | None = None
+    speaker_labels: bool | None = None
+
+
+DOCUMENT_ID_PATTERN = r"^[A-Za-z0-9_.:-]+$"
+
+
 class DocumentOut(CamelModel):
     id: str
     name: str
@@ -30,6 +43,8 @@ class DocumentOut(CamelModel):
     status: Literal["ready", "failed"]
     chunk_count: int | None
     error: str | None
+    # Distinctive terms found in the document, sent to AssemblyAI as keyterms.
+    keyterms: list[str]
 
 
 class SessionOut(CamelModel):
@@ -40,6 +55,8 @@ class SessionOut(CamelModel):
     ended_at: datetime | None
     documents: list[DocumentOut]
     turn_count: int
+    # What the next stream would send as keyterms_prompt ([] when the model has no support).
+    keyterms: list[str]
 
 
 class StreamTokenOut(CamelModel):
@@ -51,6 +68,7 @@ class StreamTokenOut(CamelModel):
     encoding: str
     # Ready-to-open AssemblyAI URL (query params + token) for the browser.
     websocket_url: str
+    keyterms: list[str]
 
 
 class TurnIn(CamelModel):

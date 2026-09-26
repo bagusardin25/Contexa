@@ -1,18 +1,22 @@
 import logging
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Form, HTTPException, Response, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 
 from app.assemblyai.routing import ENCODING, SAMPLE_RATE, speech_model_for, websocket_url
 from app.assemblyai.tokens import StreamingTokenError
 from app.documents.chunking import chunk_sections
+from app.documents.keyterms import extract_keyterms
 from app.documents.parsing import DocumentParseError, parse_document
 from app.documents.validation import UploadRejected, content_problem, detect_kind, sanitize_filename
 from app.models.session import (
+    DOCUMENT_ID_PATTERN,
     AnswerRequest,
     DocumentOut,
     SessionConfig,
+    SessionConfigUpdate,
     SessionOut,
     StreamTokenOut,
     SuggestionOut,
@@ -37,9 +41,24 @@ async def get_session(session: SessionDep) -> SessionOut:
     return session.to_out()
 
 
+@router.patch("/{session_id}")
+async def update_session(update: SessionConfigUpdate, session: SessionDep) -> SessionOut:
+    """Change languages or settings, e.g. when documents were attached before Start."""
+    changes = update.model_dump(exclude_unset=True, exclude_none=True, by_alias=False)
+    session.config = session.config.model_copy(update=changes)
+    return session.to_out()
+
+
 @router.post("/{session_id}/end")
 async def end_session(session: SessionDep) -> SessionOut:
     session.ended_at = session.ended_at or datetime.now(UTC)
+    return session.to_out()
+
+
+@router.post("/{session_id}/reset")
+async def reset_session(session: SessionDep) -> SessionOut:
+    """Start a new conversation: turns and answers are cleared, documents stay indexed."""
+    session.reset()
     return session.to_out()
 
 
@@ -69,6 +88,7 @@ async def create_stream_token(
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     session.tokens_issued += 1
+    keyterms = session.keyterms()
     return StreamTokenOut(
         token=token.token,
         expires_in_seconds=token.expires_in_seconds,
@@ -77,18 +97,31 @@ async def create_stream_token(
         sample_rate=SAMPLE_RATE,
         encoding=ENCODING,
         websocket_url=websocket_url(
-            settings.assemblyai_streaming_ws_url, session.config, token.token
+            settings.assemblyai_streaming_ws_url, session.config, token.token, keyterms
         ),
+        keyterms=keyterms,
     )
 
 
 @router.post("/{session_id}/documents", status_code=status.HTTP_201_CREATED)
 async def upload_document(
-    file: UploadFile, session: SessionDep, settings: SettingsDep
+    file: UploadFile,
+    session: SessionDep,
+    settings: SettingsDep,
+    document_id: Annotated[
+        str | None,
+        Form(alias="documentId", min_length=1, max_length=64, pattern=DOCUMENT_ID_PATTERN),
+    ] = None,
 ) -> DocumentOut:
-    """FR-006/007: validate, parse, chunk, and index one document for this session."""
+    """FR-006/007: validate, parse, chunk, and index one document for this session.
+
+    The browser may pass its own `documentId`, so evidence and citations refer to the
+    same id on both sides.
+    """
     name = sanitize_filename(file.filename)
     try:
+        if document_id is not None and document_id in session.documents:
+            raise UploadRejected("A document with this id is already attached.", 409)
         kind = detect_kind(name)
         if len(session.documents) >= settings.max_documents_per_session:
             raise UploadRejected(
@@ -106,15 +139,17 @@ async def upload_document(
         await file.close()
 
     record = DocumentRecord(
-        id=new_id("doc"), name=name, kind=kind, size_bytes=len(data), status="failed"
+        id=document_id or new_id("doc"), name=name, kind=kind, size_bytes=len(data), status="failed"
     )
     problem = content_problem(data, kind)
     if problem is None:
         try:
             sections = await run_in_threadpool(parse_document, data, kind)
+            keyterms = await run_in_threadpool(extract_keyterms, sections)
             chunks = chunk_sections(sections, record.id, name)
             session.index.add(chunks)
             record.status, record.chunk_count = "ready", len(chunks)
+            record.keyterms = keyterms
         except DocumentParseError as exc:
             problem = str(exc)
     record.error = problem
