@@ -34,15 +34,20 @@ Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT
 Contexa/
 ├── apps/
 │   ├── web/                    Next.js 16 frontend
-│   │   ├── app/                routes: / (landing page), /session (live workspace)
+│   │   ├── app/                routes: / (landing page), /session (live workspace),
+│   │   │                       /login, /register, password reset, /auth/callback
 │   │   ├── components/
 │   │   │   ├── ui/             shadcn/ui-style primitives
 │   │   │   ├── landing/        landing page sections
+│   │   │   ├── auth/           sign-in forms, Google button, header account menu
 │   │   │   └── session/        workspace: setup, transcript, copilot, context, controls
 │   │   ├── hooks/              small client hooks
 │   │   ├── lib/
 │   │   │   ├── session/        transport contract, preview transport, Zustand store
-│   │   │   └── documents/      upload validation, uploader contract, sample docs
+│   │   │   ├── documents/      upload validation, uploader contract, sample docs
+│   │   │   ├── supabase/       Supabase clients for browser, server, and proxy
+│   │   │   └── auth/           form validation, error messages, safe redirects
+│   │   ├── proxy.ts            refreshes the session for pages that read it on the server
 │   │   └── types/              session types and the SessionEvent union
 │   └── api/                    FastAPI backend
 │       ├── app/
@@ -71,6 +76,8 @@ Contexa/
       error states, light and dark themes
 - [x] API: streaming tokens, turn analysis (translation + question detection), document
       parsing, BM25 retrieval, grounded answers, WebSocket protocol
+- [x] Optional sign-in with Google or email and password (Supabase Auth). `/session` stays open
+      without an account; the API doesn't check sign-in yet.
 - [ ] Web app wired to the API. The UI still runs on a clearly labelled scripted preview;
       next up are tab/mic capture, the live transport, and uploads to the API.
 - [ ] First end-to-end run against AssemblyAI with a real API key
@@ -95,8 +102,12 @@ Terminal 2, the web app (http://localhost:3000):
 ```bash
 cd apps/web
 npm install
+cp .env.example .env.local    # optional: Supabase keys to enable sign-in
 npm run dev
 ```
+
+Sign-in is optional. To turn it on, follow the Supabase and Google setup in
+[apps/web/README.md](apps/web/README.md#sign-in-optional).
 
 Checks:
 
@@ -114,6 +125,7 @@ cd apps/web && npm run lint && npm run build
 | Speech | AssemblyAI Universal-3.5 Pro Realtime (`universal-3-5-pro`), Whisper Streaming (`whisper-rt`) for Indonesian |
 | Reasoning | AssemblyAI LLM Gateway with strict JSON-schema outputs; model set by `ASSEMBLYAI_LLM_MODEL` |
 | Retrieval | BM25 over document chunks (pgvector planned) |
+| Auth | Supabase Auth via `@supabase/ssr`: Google OAuth and email/password, PKCE, cookie sessions |
 
 ## Documentation
 
