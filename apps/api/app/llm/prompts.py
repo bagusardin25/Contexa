@@ -104,6 +104,18 @@ Turn to analyze:
     return system, user
 
 
+# How each answer style sounds when said out loud.
+ANSWER_STYLES = {
+    "concise": "one or two short sentences, the key fact first, no preamble",
+    "professional": "2 to 4 clear, polite sentences, as you would say them to judges or a client",
+    "technical": (
+        "3 to 5 precise sentences that name the mechanisms, components, and trade-offs the "
+        "excerpts describe"
+    ),
+    "casual": "2 to 4 friendly, conversational sentences, as you would say them to teammates",
+}
+
+
 def answer_prompt(
     *,
     question: str,
@@ -112,6 +124,7 @@ def answer_prompt(
     target_language: str,
     excerpts: Sequence[Excerpt],
     recent: Sequence[ContextLine],
+    style: str = "professional",
 ) -> tuple[str, str]:
     preferred = language_name(preferred_language)
     target = language_name(target_language)
@@ -123,8 +136,8 @@ Rules:
   invent project details, numbers, names, dates, or plans.
 - If the excerpts don't cover the question, say so honestly in the answer (for example, that
   the detail isn't decided yet, or that you'll follow up) instead of guessing.
-- Speak as the participant, in the first person ("we", "our project"): natural, concise,
-  2 to 5 sentences, no markdown, no lists, no citations inside the spoken text.
+- Speak as the participant, in the first person ("we", "our project"): {ANSWER_STYLES[style]}.
+  No markdown, no lists, no citations inside the spoken text.
 
 Return JSON with:
 - question_summary: one short sentence in {preferred} restating what was asked.
@@ -147,4 +160,32 @@ Recent conversation, oldest first:
 
 Question from {_speaker(speaker)}:
 {question}"""
+    return system, user
+
+
+def recap_prompt(
+    *, title: str, language: str, lines: Sequence[str], omitted: int
+) -> tuple[str, str]:
+    """The recap of a finished conversation. `lines` are rendered turns, oldest first."""
+    name = language_name(language)
+    system = f"""You write the recap of a conversation that Contexa, a live interpreting copilot,
+followed for a participant. Write every field in {name}.
+
+Return JSON with:
+- summary: 2 to 4 sentences on what the conversation covered and where it ended up.
+- key_points: up to 5 short points (facts, decisions, positions), most important first.
+- action_items: up to 5 concrete follow-ups someone committed to or was asked to do, written
+  as "Speaker X: what" when the speaker is known. [] if there are none.
+- open_questions: up to 5 questions raised that the conversation did not settle. [] if none.
+
+Use only what the transcript says: never invent names, numbers, dates, or commitments. Keep
+product names and technical terms in their original form. The transcript comes from live
+speech recognition, so infer the intended words where a word is clearly misheard."""
+    header = f"Conversation: {title.strip() or '(untitled)'}"
+    if omitted:
+        header += f"\n(The first {omitted} turns are left out for length.)"
+    user = f"""{header}
+
+Transcript, oldest first:
+{chr(10).join(lines)}"""
     return system, user

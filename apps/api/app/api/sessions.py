@@ -173,7 +173,7 @@ async def request_answer(
     body: AnswerRequest, session: SessionDep, pipeline: PipelineDep
 ) -> SuggestionOut:
     """FR-012: manual "Generate answer" for a finalized turn (HTTP alternative to the socket)."""
-    suggestion = await pipeline.answer(session, body.turn_id, "manual")
+    suggestion = await pipeline.answer(session, body.turn_id, "manual", style=body.style)
     if suggestion is None:
         raise HTTPException(status_code=404, detail="Turn not found.")
     return suggestion

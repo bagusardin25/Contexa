@@ -7,6 +7,7 @@ import {
   ChevronDownIcon,
   FlaskConicalIcon,
   LanguagesIcon,
+  RadioIcon,
   ShieldAlertIcon,
   SparklesIcon,
   VolumeXIcon,
@@ -34,6 +35,7 @@ import {
   languageName,
   speakerLanguageOption,
 } from "@/lib/languages";
+import { LIVE_AVAILABLE, openLive } from "@/lib/session/mode";
 import { cn } from "@/lib/utils";
 
 import { useIsPreview, useSession } from "./session-store-provider";
@@ -122,9 +124,17 @@ function PreviewMenu() {
       <DropdownMenuContent align="end" className="w-76">
         <DropdownMenuLabel className="font-normal leading-relaxed">
           <span className="mb-0.5 block font-medium text-foreground">UI preview mode</span>
-          No API is connected (NEXT_PUBLIC_API_URL isn&apos;t set), so sessions replay a scripted
-          Q&amp;A. Use these to check how the UI handles failures.
+          {LIVE_AVAILABLE
+            ? "Sessions replay a scripted Q&A; nothing is sent to AssemblyAI or the LLM."
+            : "No API is connected (NEXT_PUBLIC_API_URL isn't set), so sessions replay a scripted Q&A."}{" "}
+          Use these to check how the UI handles failures.
         </DropdownMenuLabel>
+        {LIVE_AVAILABLE ? (
+          <DropdownMenuItem onSelect={openLive}>
+            <RadioIcon />
+            Switch to the live pipeline
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={status !== "listening"} onSelect={() => simulate("connection_drop")}>
           <WifiOffIcon />

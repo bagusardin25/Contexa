@@ -2,6 +2,7 @@
 
 import {
   AppWindowIcon,
+  FileAudioIcon,
   CheckIcon,
   CopyIcon,
   LoaderCircleIcon,
@@ -94,6 +95,7 @@ export function ControlBar() {
 
 function AudioReadout({ className }: { className?: string }) {
   const audioSource = useSession((state) => state.config.audioSource);
+  const fileName = useSession((state) => state.audioFile?.name ?? "Recording");
   const speakerLanguage = useSession((state) => state.config.speakerLanguage);
   const keyterms = useSession((state) => state.streamKeyterms);
   const model = SPEECH_MODELS[speechModelFor(speakerLanguage)];
@@ -101,9 +103,17 @@ function AudioReadout({ className }: { className?: string }) {
   return (
     <div className={cn("items-center gap-3 rounded-full border bg-card px-3 py-1.5 text-xs text-muted-foreground", className)}>
       <AudioLevelMeter />
-      <span className="flex items-center gap-1.5">
-        {audioSource === "tab" ? <AppWindowIcon className="size-3.5" aria-hidden /> : <MicIcon className="size-3.5" aria-hidden />}
-        {audioSource === "tab" ? "Tab audio" : "Microphone"}
+      <span className="flex min-w-0 items-center gap-1.5">
+        {audioSource === "tab" ? (
+          <AppWindowIcon className="size-3.5 shrink-0" aria-hidden />
+        ) : audioSource === "file" ? (
+          <FileAudioIcon className="size-3.5 shrink-0" aria-hidden />
+        ) : (
+          <MicIcon className="size-3.5 shrink-0" aria-hidden />
+        )}
+        <span className="max-w-40 truncate">
+          {audioSource === "tab" ? "Tab audio" : audioSource === "file" ? fileName : "Microphone"}
+        </span>
       </span>
       <span className="h-3 w-px bg-border" aria-hidden />
       <span className="hidden lg:inline">{model.shortName}</span>

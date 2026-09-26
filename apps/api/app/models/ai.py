@@ -64,3 +64,20 @@ ANSWER_SCHEMA = _strict(
         "confidence_note": {"type": "string"},
     }
 )
+
+
+class SessionRecap(BaseModel):
+    summary: str
+    key_points: list[str]
+    action_items: list[str]
+    open_questions: list[str]
+
+
+RECAP_SCHEMA = _strict(
+    {
+        "summary": {"type": "string"},
+        "key_points": _STRING_LIST,
+        "action_items": _STRING_LIST,
+        "open_questions": _STRING_LIST,
+    }
+)

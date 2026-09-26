@@ -50,6 +50,13 @@ STATEMENT_ANALYSIS = {
     "search_keywords": [],
 }
 
+RECAP = {
+    "summary": "Tim membahas cara Notewave menangani pembaruan bersamaan.",
+    "key_points": ["Optimistic locking dengan kolom version", "  Sinkronisasi   lewat Supabase  "],
+    "action_items": ["Speaker A: kirim dokumen arsitektur"],
+    "open_questions": ["Kapan harga diumumkan?"],
+}
+
 ANSWER = {
     "question_summary": "Bagaimana aplikasi menangani pembaruan bersamaan?",
     "answer_preferred_language": "Kami memakai optimistic locking dengan kolom version.",
@@ -68,6 +75,7 @@ class FakeLLM:
         self.responses: dict[str, dict[str, Any] | Callable[[dict[str, Any]], dict[str, Any]]] = {
             "turn_analysis": QUESTION_ANALYSIS,
             "grounded_answer": ANSWER,
+            "session_recap": RECAP,
         }
         self.failing: set[str] = set()
 

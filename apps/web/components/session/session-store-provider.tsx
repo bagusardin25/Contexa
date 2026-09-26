@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 
+import type { SessionMode } from "@/lib/session/mode";
 import { createSessionServices } from "@/lib/session/services";
 import {
   createSessionStore,
@@ -18,9 +19,10 @@ interface SessionContextValue {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-export function SessionStoreProvider({ children }: { children: ReactNode }) {
+/** The mode is fixed for the provider's lifetime; key the provider by it to switch. */
+export function SessionStoreProvider({ mode, children }: { mode: SessionMode; children: ReactNode }) {
   const [value] = useState<SessionContextValue>(() => {
-    const { transport, uploader } = createSessionServices();
+    const { transport, uploader } = createSessionServices(mode);
     return {
       store: createSessionStore({ transport, uploader }),
       transportKind: transport.kind,

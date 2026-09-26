@@ -43,7 +43,7 @@ async def _dispatch(
         # e.g. the turn was lost during a reconnect; tell the UI instead of leaving it waiting
         await emit(ErrorEvent(message=f"Unknown turn: {message.turn_id}."))
     elif isinstance(message, RequestAnswerMessage):
-        await pipeline.answer(session, message.turn_id, "manual", emit)
+        await pipeline.answer(session, message.turn_id, "manual", emit, style=message.style)
     else:
         await pipeline.retry_translation(session, message.turn_id, emit)
 

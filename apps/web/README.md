@@ -64,8 +64,9 @@ How it fits together:
 `createSessionServices()` (`lib/session/services.ts`) picks the live transport and uploader when
 `NEXT_PUBLIC_API_URL` is set. Both share one backend session (`lib/api/session.ts`).
 
-- `LiveTransport` (`lib/session/live-transport.ts`) captures a shared tab or the microphone,
-  turns it into 50 ms frames of 16 kHz PCM16 in an AudioWorklet (`public/audio/pcm16-processor.js`),
+- `LiveTransport` (`lib/session/live-transport.ts`) captures a shared tab, the microphone, or a
+  local recording (played aloud, starting once AssemblyAI is listening, pausing while a dropped
+  stream reconnects, and ending the session two seconds after it finishes), turns it into 50 ms frames of 16 kHz PCM16 in an AudioWorklet (`public/audio/pcm16-processor.js`),
   and streams them to AssemblyAI with a short-lived token from the API. Partial turns only update
   the screen; final turns go to the API over `WS /ws/sessions/{id}`, and the server's events
   (translation, classification, evidence, answer) feed the store.
@@ -80,13 +81,23 @@ How it fits together:
   reports upload progress, shows each document's keyterms, and supports Retry.
 - The setup screen checks `/health` first: it names the LLM provider and models in use, and says
   when the API is unreachable, has no AssemblyAI key, or has no LLM configured (the transcript
-  still works then). **Load sample project docs** uploads the real files in `public/samples/`.
+  still works then). An API on free hosting that is waking up gets a "Waking up" notice; the
+  check keeps retrying for two minutes, so the page recovers on its own. **Load sample project
+  docs** uploads the real files in `public/samples/`.
+- Answers follow the style picked at setup (Concise, Professional, Technical, Casual), and the
+  copilot's style menu redrafts any answer in another style. **Listen** reads the ready-to-say
+  answer aloud with the browser's own voices (Web Speech API), so you can hear how it sounds.
+- When a session stops, the store asks for a recap (`POST /api/recap` with the transcript the
+  browser holds): a summary, key points, action items, and open questions in the reading
+  language. It has a Retry, and **Export .md** includes it.
 
 ## Preview mode
 
-Without `NEXT_PUBLIC_API_URL`, `/session` runs on `PreviewTransport`
+Without `NEXT_PUBLIC_API_URL`, or at `/session?preview` (linked from the API status notice when
+the API is unreachable or waking up), `/session` runs on `PreviewTransport`
 (`lib/session/preview-transport.ts`). It replays a scripted English or Japanese Q&A and emits
-exactly the events the live pipeline emits, with realistic timing. The UI labels it with a
+exactly the events the live pipeline emits, with realistic timing, plus a scripted recap. Nothing
+is sent to AssemblyAI or the LLM. The UI labels it with a
 **Preview** badge, and the badge menu simulates failures: connection drop, translation failure,
 answer failure, permission denied, and missing tab audio.
 

@@ -12,6 +12,7 @@ TurnType = Literal["statement", "question", "action_request", "other"]
 SuggestionStage = Literal["retrieving", "generating", "ready", "failed"]
 SuggestionTrigger = Literal["auto", "manual"]
 DocumentKind = Literal["pdf", "docx", "md", "txt"]
+AnswerStyle = Literal["concise", "professional", "technical", "casual"]
 
 
 class SessionConfig(CamelModel):
@@ -20,6 +21,7 @@ class SessionConfig(CamelModel):
     display_language: LanguageCode = "id"
     response_language: LanguageCode | Literal["auto"] = "auto"
     speaker_labels: bool = True
+    answer_style: AnswerStyle = "professional"
 
 
 class SessionConfigUpdate(CamelModel):
@@ -30,6 +32,7 @@ class SessionConfigUpdate(CamelModel):
     display_language: LanguageCode | None = None
     response_language: LanguageCode | Literal["auto"] | None = None
     speaker_labels: bool | None = None
+    answer_style: AnswerStyle | None = None
 
 
 DOCUMENT_ID_PATTERN = r"^[A-Za-z0-9_.:-]+$"
@@ -140,6 +143,7 @@ class SuggestionOut(CamelModel):
     id: str
     turn_id: str
     trigger: SuggestionTrigger
+    style: AnswerStyle = "professional"
     stage: SuggestionStage
     evidence: list[Evidence] | None = None
     answer: SuggestedAnswer | None = None
@@ -155,3 +159,27 @@ class TranscriptOut(CamelModel):
 
 class AnswerRequest(CamelModel):
     turn_id: str = Field(min_length=1, max_length=64)
+    # Another style redrafts an existing answer; empty = the session's style.
+    style: AnswerStyle | None = None
+
+
+class RecapTurn(CamelModel):
+    speaker: str | None = Field(None, max_length=32)
+    text: str = Field(min_length=1, max_length=4000)
+    type: TurnType | None = None
+
+
+class RecapRequest(CamelModel):
+    """A finished conversation, sent by the browser, which holds the full transcript even
+    when the API restarted mid-session."""
+
+    title: str = Field("", max_length=80)
+    language: LanguageCode = "id"
+    turns: list[RecapTurn] = Field(min_length=1, max_length=2000)
+
+
+class RecapOut(CamelModel):
+    summary: str
+    key_points: list[str]
+    action_items: list[str]
+    open_questions: list[str]

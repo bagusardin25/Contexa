@@ -5,12 +5,17 @@ import {
   CaptionsIcon,
   CircleCheckIcon,
   DownloadIcon,
+  LoaderCircleIcon,
   PlusIcon,
+  RotateCwIcon,
+  SparklesIcon,
   TriangleAlertIcon,
   WifiOffIcon,
 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useStickToBottom } from "@/hooks/use-stick-to-bottom";
 import { formatClock, formatLatency, pluralize } from "@/lib/format";
 import { downloadTextFile, transcriptToMarkdown } from "@/lib/session/export";
@@ -146,7 +151,8 @@ function ConversationEmptyState({
         <AudioBars className="h-5" />
       </div>
       <p className="font-medium">
-        Listening to your {audioSource === "tab" ? "shared tab" : "microphone"}
+        Listening to your{" "}
+        {audioSource === "tab" ? "shared tab" : audioSource === "file" ? "recording" : "microphone"}
       </p>
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">
         Transcripts appear here as people speak. Every finished turn is translated and checked for
@@ -220,6 +226,7 @@ function SessionSummary() {
           </div>
         ))}
       </dl>
+      {turns.length > 0 ? <RecapCard /> : null}
       <div className="mt-5 flex flex-wrap gap-2">
         {turns.length > 0 ? <ExportButton /> : null}
         <Button size="sm" onClick={newSession}>
@@ -228,5 +235,76 @@ function SessionSummary() {
         </Button>
       </div>
     </section>
+  );
+}
+
+function RecapCard() {
+  const recap = useSession((state) => state.recap);
+  const generateRecap = useSession((state) => state.generateRecap);
+
+  return (
+    <section
+      aria-label="Recap"
+      aria-busy={recap.status === "loading"}
+      className="mt-5 rounded-xl border bg-muted/30 p-4"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <SparklesIcon className="size-4 text-primary" aria-hidden />
+        <h4 className="text-sm font-semibold">Recap</h4>
+        <Badge variant="ai" className="px-1.5 py-0 text-[10px]">
+          AI-generated
+        </Badge>
+      </div>
+
+      {recap.status === "loading" ? (
+        <div className="mt-3 space-y-2">
+          <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+            <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden />
+            Writing the recap…
+          </p>
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-5/6" />
+          <Skeleton className="h-3 w-2/3" />
+        </div>
+      ) : recap.status === "failed" ? (
+        <div role="alert" className="mt-3 flex flex-wrap items-start gap-3 text-sm">
+          <p className="min-w-0 flex-1 text-muted-foreground">
+            Couldn&apos;t write the recap. {recap.message}
+          </p>
+          <Button size="xs" variant="outline" onClick={() => void generateRecap()}>
+            <RotateCwIcon />
+            Retry recap
+          </Button>
+        </div>
+      ) : recap.status === "ready" ? (
+        <div lang={recap.language} className="mt-3 space-y-4 text-sm">
+          <p className="leading-relaxed">{recap.recap.summary}</p>
+          <RecapList title="Key points" items={recap.recap.keyPoints} />
+          <RecapList title="Action items" items={recap.recap.actionItems} />
+          <RecapList title="Open questions" items={recap.recap.openQuestions} />
+        </div>
+      ) : (
+        <Button size="xs" variant="outline" className="mt-3" onClick={() => void generateRecap()}>
+          <SparklesIcon />
+          Write a recap
+        </Button>
+      )}
+    </section>
+  );
+}
+
+function RecapList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <p className="mb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        {title}
+      </p>
+      <ul className="list-disc space-y-1 pl-5 leading-relaxed marker:text-muted-foreground">
+        {items.map((item, index) => (
+          <li key={index}>{item}</li>
+        ))}
+      </ul>
+    </div>
   );
 }

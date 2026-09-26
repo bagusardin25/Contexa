@@ -6,7 +6,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import realtime, sessions
+from app.api import realtime, recap, sessions
 from app.assemblyai.tokens import StreamingTokenClient
 from app.config import Settings, get_settings
 from app.conversation.pipeline import TurnPipeline
@@ -76,6 +76,7 @@ def create_app(
     )
     app.include_router(sessions.router)
     app.include_router(realtime.router)
+    app.include_router(recap.router)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, object]:

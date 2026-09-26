@@ -5,7 +5,9 @@ import {
   type LanguageCode,
 } from "@/lib/languages";
 import type {
+  AnswerStyle,
   Evidence,
+  RecapInput,
   SessionConfig,
   SessionError,
   SessionEvent,
@@ -18,6 +20,7 @@ import {
   ENGLISH_SCRIPT,
   JAPANESE_SCRIPT,
   NO_CONTEXT_ANSWER,
+  scriptedRecap,
   type Localized,
   type PreviewScript,
   type ScriptedTurn,
@@ -44,6 +47,10 @@ const START_ERRORS: Record<StartFailure, SessionError> = {
       "The shared tab has no audio track. Share it again and turn on “Share tab audio”.",
   },
 };
+
+function firstSentence(text: string) {
+  return text.split(/(?<=[.!?。！？])\s*/u)[0] || text;
+}
 
 function jitter(min: number, max: number) {
   return min + Math.random() * (max - min);
@@ -170,12 +177,17 @@ export class PreviewTransport implements SessionTransport {
     this.turns.clear();
   }
 
-  requestAnswer(turnId: string) {
-    void this.answer(turnId, "manual", this.sessionRun);
+  requestAnswer(turnId: string, style?: AnswerStyle) {
+    void this.answer(turnId, "manual", this.sessionRun, style);
   }
 
   retryTranslation(turnId: string) {
     void this.translate(turnId, this.sessionRun);
+  }
+
+  async recap(input: RecapInput) {
+    await new Promise((resolve) => window.setTimeout(resolve, jitter(1400, 2000)));
+    return scriptedRecap(input.turns.length, input.language);
   }
 
   private emit(event: SessionEvent) {
@@ -297,10 +309,16 @@ export class PreviewTransport implements SessionTransport {
     });
   }
 
-  private async answer(turnId: string, trigger: SuggestionTrigger, session: number) {
+  private async answer(
+    turnId: string,
+    trigger: SuggestionTrigger,
+    session: number,
+    requestedStyle?: AnswerStyle,
+  ) {
     const scripted = this.turns.get(turnId);
     if (!this.config || !scripted) return;
 
+    const style = requestedStyle ?? this.config.answerStyle;
     const suggestionId = `suggestion-${++this.sequence}`;
     const startedAt = performance.now();
     this.emit({
@@ -308,6 +326,7 @@ export class PreviewTransport implements SessionTransport {
       suggestionId,
       turnId,
       trigger,
+      style,
       createdAtMs: this.elapsed(),
     });
 
@@ -341,7 +360,7 @@ export class PreviewTransport implements SessionTransport {
       type: "suggestion_ready",
       suggestionId,
       latencyMs: performance.now() - startedAt,
-      answer: this.composeAnswer(scripted, evidence, documents.length),
+      answer: this.composeAnswer(scripted, evidence, documents.length, style),
     });
   }
 
@@ -349,6 +368,7 @@ export class PreviewTransport implements SessionTransport {
     scripted: ScriptedTurn,
     evidence: Evidence[],
     documentCount: number,
+    style: AnswerStyle,
   ): SuggestedAnswer {
     const config = this.config as SessionConfig;
     const preferred = config.displayLanguage;
@@ -376,10 +396,12 @@ export class PreviewTransport implements SessionTransport {
       scripted.translation[preferred] ??
       (this.script.language === preferred ? scripted.text : placeholder(preferred));
 
+    // The script has one wording per answer; "concise" keeps its first sentence.
+    const styled = (text: string) => (style === "concise" ? firstSentence(text) : text);
     return {
       questionSummary: summary,
-      answerPreferredLanguage: texts[preferred] ?? placeholder(preferred),
-      answerTargetLanguage: texts[target] ?? placeholder(target),
+      answerPreferredLanguage: styled(texts[preferred] ?? placeholder(preferred)),
+      answerTargetLanguage: styled(texts[target] ?? placeholder(target)),
       preferredLanguage: preferred,
       targetLanguage: target,
       usedContext: evidence.map(({ documentId, chunkId }) => ({ documentId, chunkId })),

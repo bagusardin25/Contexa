@@ -1,5 +1,5 @@
 import type { LanguageCode } from "@/lib/languages";
-import type { TurnClassification } from "@/types/session";
+import type { SessionRecap, TurnClassification } from "@/types/session";
 
 /**
  * Scripted conversations for the UI preview. They replay the golden demo path
@@ -212,3 +212,53 @@ export const ACKNOWLEDGEMENT_ANSWER: Localized = {
   en: "Thank you, that's really helpful feedback.",
   ja: "ありがとうございます。とても参考になります。",
 };
+
+/** The scripted recap, by how far the conversation got: points unlock with the turns. */
+const RECAP = {
+  summary: {
+    id: "Sesi tanya jawab dengan tim yang membangun alat kolaborasi realtime untuk mahasiswa. Juri menyoroti pentingnya latency rendah, lalu bertanya soal penanganan pembaruan bersamaan dan rencana harga setelah pilot.",
+    en: "A Q&A with a team building a realtime collaboration tool for students. The judges stressed low latency, then asked how concurrent edits are handled and what pricing looks like after the pilot.",
+    ja: "学生向けリアルタイム共同編集ツールを開発するチームとの質疑応答。審査員は低レイテンシの重要性を強調し、同時編集の扱いとパイロット後の料金について質問しました。",
+  } satisfies Localized,
+  latency: {
+    id: "Latency di atas beberapa ratus milidetik membuat aplikasi terasa rusak.",
+    en: "Latency above a few hundred milliseconds makes the app feel broken.",
+    ja: "数百ミリ秒を超えるレイテンシはアプリが壊れているように感じさせる。",
+  } satisfies Localized,
+  locking: {
+    id: "Pembaruan bersamaan ditangani dengan optimistic locking lewat kolom version.",
+    en: "Concurrent updates are handled with optimistic locking on a version column.",
+    ja: "同時更新は version カラムによる楽観的ロックで処理する。",
+  } satisfies Localized,
+  pilot: {
+    id: "Pilot dengan tiga kampus mitra direncanakan pada Q4; harga belum ditetapkan.",
+    en: "A pilot with three partner campuses is planned for Q4; pricing isn't set yet.",
+    ja: "第4四半期に3つの提携キャンパスでパイロットを予定。料金は未定。",
+  } satisfies Localized,
+  followUp: {
+    id: "Speaker B: tindak lanjuti rencana harga setelah pilot selesai",
+    en: "Speaker B: follow up on pricing once the pilot ends",
+    ja: "Speaker B: パイロット終了後に料金について改めて確認する",
+  } satisfies Localized,
+  pricing: {
+    id: "Berapa harga dan paket tim setelah pilot mahasiswa?",
+    en: "What will pricing and team plans be after the student pilot?",
+    ja: "学生向けパイロット後の料金とチームプランはどうなるか？",
+  } satisfies Localized,
+};
+
+export function scriptedRecap(turnCount: number, language: LanguageCode): SessionRecap {
+  const pick = (text: Localized) => text[language] ?? text.en ?? "";
+  const when = (reached: number, text: Localized) => (turnCount >= reached ? [pick(text)] : []);
+  const keyPoints: string[] = [
+    ...when(2, RECAP.latency),
+    ...when(3, RECAP.locking),
+    ...when(5, RECAP.pilot),
+  ];
+  return {
+    summary: pick(RECAP.summary),
+    keyPoints,
+    actionItems: when(5, RECAP.followUp),
+    openQuestions: when(5, RECAP.pricing),
+  };
+}

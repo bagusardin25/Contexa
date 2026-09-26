@@ -11,7 +11,10 @@ export type SessionStatus =
   | "stopped"
   | "error";
 
-export type AudioSource = "tab" | "microphone";
+/** `file` plays a local recording through the live pipeline. */
+export type AudioSource = "tab" | "microphone" | "file";
+
+export type AnswerStyle = "concise" | "professional" | "technical" | "casual";
 
 export interface SessionConfig {
   title: string;
@@ -23,6 +26,8 @@ export interface SessionConfig {
   audioSource: AudioSource;
   /** Streaming speaker diarization. */
   speakerLabels: boolean;
+  /** How suggested answers sound. */
+  answerStyle: AnswerStyle;
 }
 
 export type SessionErrorCode =
@@ -122,6 +127,7 @@ export interface Suggestion {
   id: string;
   turnId: string;
   trigger: SuggestionTrigger;
+  style: AnswerStyle;
   stage: SuggestionStage;
   /** `null` until retrieval finishes. */
   evidence: Evidence[] | null;
@@ -184,6 +190,7 @@ export type SessionEvent =
       suggestionId: string;
       turnId: string;
       trigger: SuggestionTrigger;
+      style: AnswerStyle;
       createdAtMs: number;
     }
   | { type: "suggestion_evidence"; suggestionId: string; evidence: Evidence[] }
@@ -194,3 +201,24 @@ export type SessionEvent =
       latencyMs: number;
     }
   | { type: "suggestion_failed"; suggestionId: string; message: string };
+
+/** The AI recap written when a session ends (PRD golden path, step 7). */
+export interface SessionRecap {
+  summary: string;
+  keyPoints: string[];
+  actionItems: string[];
+  openQuestions: string[];
+}
+
+export type RecapState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; recap: SessionRecap; language: LanguageCode }
+  | { status: "failed"; message: string };
+
+/** What the recap is written from: the transcript the browser holds. */
+export interface RecapInput {
+  title: string;
+  language: LanguageCode;
+  turns: { speaker: string | null; text: string; type: TurnType | null }[];
+}

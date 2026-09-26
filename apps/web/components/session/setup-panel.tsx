@@ -1,15 +1,17 @@
 "use client";
 
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import {
   AppWindowIcon,
   AudioLinesIcon,
+  FileAudioIcon,
   FlaskConicalIcon,
   LanguagesIcon,
   LibraryIcon,
   LoaderCircleIcon,
   MicIcon,
   RadioIcon,
+  SparklesIcon,
   TriangleAlertIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -27,7 +29,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { pluralize } from "@/lib/format";
+import { ANSWER_STYLES, ANSWER_STYLE_ORDER } from "@/lib/answer-styles";
+import { formatBytes, pluralize } from "@/lib/format";
 import {
   DISPLAY_LANGUAGES,
   LANGUAGES,
@@ -37,7 +40,8 @@ import {
   type LanguageCode,
   type SpeakerLanguage,
 } from "@/lib/languages";
-import type { AudioSource, SessionError, SessionErrorCode } from "@/types/session";
+import { LIVE_AVAILABLE, openLive } from "@/lib/session/mode";
+import type { AnswerStyle, AudioSource, SessionError, SessionErrorCode } from "@/types/session";
 
 import { ApiStatus } from "./api-status";
 import { useIsPreview, useSession } from "./session-store-provider";
@@ -57,6 +61,7 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
   const updateConfig = useSession((state) => state.updateConfig);
   const start = useSession((state) => state.start);
   const stop = useSession((state) => state.stop);
+  const audioFile = useSession((state) => state.audioFile);
   const isPreview = useIsPreview();
   const titleId = useId();
   const speakerLabelsId = useId();
@@ -66,9 +71,13 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
   const speaker = speakerLanguageOption(config.speakerLanguage);
   const model = SPEECH_MODELS[speaker.model];
 
+  // The preview replays its script, so it doesn't need the recording.
+  const needsFile = config.audioSource === "file" && !audioFile && !isPreview;
   const startLabel =
     status === "requesting_permission"
-      ? "Requesting audio access…"
+      ? config.audioSource === "file"
+        ? "Loading the recording…"
+        : "Requesting audio access…"
       : status === "connecting"
         ? isPreview
           ? "Connecting…"
@@ -189,18 +198,36 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
           </section>
 
           <section className="space-y-3">
+            <SectionTitle icon={SparklesIcon}>Suggested answers</SectionTitle>
+            <RadioGroup
+              value={config.answerStyle}
+              onValueChange={(value) => updateConfig({ answerStyle: value as AnswerStyle })}
+              className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+              aria-label="Answer style"
+            >
+              {ANSWER_STYLE_ORDER.map((style) => (
+                <StyleOption key={style} value={style} label={ANSWER_STYLES[style].label} />
+              ))}
+            </RadioGroup>
+            <p className="text-xs text-muted-foreground">
+              {ANSWER_STYLES[config.answerStyle].description} You can redraft any answer in another
+              style from the copilot.
+            </p>
+          </section>
+
+          <section className="space-y-3">
             <SectionTitle icon={AudioLinesIcon}>Audio source</SectionTitle>
             <RadioGroup
               value={config.audioSource}
               onValueChange={(value) => updateConfig({ audioSource: value as AudioSource })}
-              className="grid gap-3 sm:grid-cols-2"
+              className="grid gap-3 sm:grid-cols-3"
               aria-label="Audio source"
             >
               <SourceOption
                 value="tab"
                 icon={AppWindowIcon}
                 title="Browser tab"
-                description="Webinars, YouTube, and web meetings. Works in Chrome and Edge."
+                description="Webinars, YouTube, and web meetings, in Chrome and Edge."
                 recommended
               />
               <SourceOption
@@ -209,7 +236,14 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
                 title="Microphone"
                 description="In-person conversations, or when tab audio isn't available."
               />
+              <SourceOption
+                value="file"
+                icon={FileAudioIcon}
+                title="Audio file"
+                description="Play a recording through the live pipeline, e.g. a past webinar."
+              />
             </RadioGroup>
+            {config.audioSource === "file" ? <RecordingPicker /> : null}
             <div className="flex items-center justify-between gap-4 rounded-xl border px-4 py-3">
               <div className="space-y-1">
                 <Label htmlFor={speakerLabelsId}>Label speakers</Label>
@@ -233,7 +267,11 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
             <p className="flex-1 text-xs leading-relaxed text-muted-foreground">
               {config.audioSource === "tab"
                 ? "Your browser will ask which tab to share. Pick the one with the webinar and turn on “Share tab audio”."
-                : "Your browser will ask for microphone access."}
+                : config.audioSource === "file"
+                  ? isPreview
+                    ? "The preview replays its scripted conversation instead of a recording."
+                    : "The recording plays here in real time while it's transcribed. The session stops when it ends."
+                  : "Your browser will ask for microphone access."}
             </p>
             <div className="flex gap-2">
               {starting ? (
@@ -241,7 +279,12 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
                   Cancel
                 </Button>
               ) : null}
-              <Button size="lg" className="flex-1 sm:min-w-48" disabled={starting} onClick={() => void start()}>
+              <Button
+                size="lg"
+                className="flex-1 sm:min-w-48"
+                disabled={starting || needsFile}
+                onClick={() => void start()}
+              >
                 {starting ? <LoaderCircleIcon className="animate-spin" /> : <RadioIcon />}
                 {startLabel}
               </Button>
@@ -304,6 +347,56 @@ function SourceOption({
         <span className="block text-xs text-muted-foreground">{description}</span>
       </span>
     </Label>
+  );
+}
+
+function StyleOption({ value, label }: { value: AnswerStyle; label: string }) {
+  const id = useId();
+  return (
+    <Label
+      htmlFor={id}
+      className="cursor-pointer gap-2 rounded-lg border px-3 py-2 font-normal transition-colors hover:bg-accent/40 has-[[data-state=checked]]:border-primary/60 has-[[data-state=checked]]:bg-primary/5 has-[[data-state=checked]]:font-medium"
+    >
+      <RadioGroupItem value={value} id={id} />
+      {label}
+    </Label>
+  );
+}
+
+function RecordingPicker() {
+  const audioFile = useSession((state) => state.audioFile);
+  const setAudioFile = useSession((state) => state.setAudioFile);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-dashed px-4 py-3">
+      <FileAudioIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <div className="min-w-0 flex-1 text-sm">
+        {audioFile ? (
+          <>
+            <p className="truncate font-medium">{audioFile.name}</p>
+            <p className="text-xs text-muted-foreground">{formatBytes(audioFile.size)}</p>
+          </>
+        ) : (
+          <p className="text-muted-foreground">MP3, WAV, M4A, WebM, or an MP4 video with sound.</p>
+        )}
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="audio/*,video/mp4,video/webm,.mp3,.wav,.m4a,.ogg,.webm,.mp4"
+        aria-label="Recording to play"
+        className="sr-only"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) setAudioFile(file);
+          event.target.value = "";
+        }}
+      />
+      <Button variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
+        {audioFile ? "Change" : "Choose a recording"}
+      </Button>
+    </div>
   );
 }
 
@@ -406,15 +499,29 @@ function PreviewNotice() {
   return (
     <div className="mb-4 flex gap-3 rounded-xl border border-dashed border-primary/30 bg-primary/5 p-4 text-sm">
       <FlaskConicalIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-      <div className="space-y-1">
-        <p className="font-medium">UI preview: no API is connected</p>
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="font-medium">
+          {LIVE_AVAILABLE ? "Scripted preview" : "UI preview: no API is connected"}
+        </p>
         <p className="text-muted-foreground">
           Starting a session replays a scripted English or Japanese Q&amp;A with realistic timing so
-          every screen can be reviewed. Set{" "}
-          <code className="font-mono text-[12px]">NEXT_PUBLIC_API_URL</code> to run the live
-          AssemblyAI pipeline instead. Load the sample documents first to see grounded answers.
+          every screen can be reviewed. Load the sample documents first to see grounded answers.{" "}
+          {LIVE_AVAILABLE ? (
+            "Nothing is sent to AssemblyAI or the LLM."
+          ) : (
+            <>
+              Set <code className="font-mono text-[12px]">NEXT_PUBLIC_API_URL</code> to run the
+              live AssemblyAI pipeline instead.
+            </>
+          )}
         </p>
       </div>
+      {LIVE_AVAILABLE ? (
+        <Button variant="outline" size="xs" className="shrink-0 self-start" onClick={openLive}>
+          <RadioIcon />
+          Go live
+        </Button>
+      ) : null}
     </div>
   );
 }

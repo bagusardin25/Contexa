@@ -1,5 +1,5 @@
 import type { SpeechModel } from "@/lib/languages";
-import type { DocumentKind, SessionConfig } from "@/types/session";
+import type { DocumentKind, RecapInput, SessionConfig, SessionRecap } from "@/types/session";
 
 /**
  * Base URL of the Contexa API (FastAPI), e.g. `http://localhost:8000`.
@@ -20,7 +20,7 @@ export class ApiError extends Error {
 
 export type ApiSessionConfig = Pick<
   SessionConfig,
-  "title" | "speakerLanguage" | "displayLanguage" | "responseLanguage" | "speakerLabels"
+  "title" | "speakerLanguage" | "displayLanguage" | "responseLanguage" | "speakerLabels" | "answerStyle"
 >;
 
 export interface ApiDocument {
@@ -83,8 +83,9 @@ export interface StreamToken {
 }
 
 export function toApiConfig(config: SessionConfig): ApiSessionConfig {
-  const { title, speakerLanguage, displayLanguage, responseLanguage, speakerLabels } = config;
-  return { title, speakerLanguage, displayLanguage, responseLanguage, speakerLabels };
+  const { title, speakerLanguage, displayLanguage, responseLanguage, speakerLabels, answerStyle } =
+    config;
+  return { title, speakerLanguage, displayLanguage, responseLanguage, speakerLabels, answerStyle };
 }
 
 function baseUrl() {
@@ -129,7 +130,7 @@ function json(method: string, body: unknown): RequestInit {
 const session = (id: string) => `/api/sessions/${encodeURIComponent(id)}`;
 
 export const api = {
-  health: () => request<ApiHealth>("/health", { cache: "no-store" }),
+  health: (signal?: AbortSignal) => request<ApiHealth>("/health", { cache: "no-store", signal }),
   createSession: (config: Partial<ApiSessionConfig> = {}) =>
     request<ApiSession>("/api/sessions", json("POST", config)),
   getSession: (id: string) => request<ApiSession>(session(id)),
@@ -142,6 +143,8 @@ export const api = {
     request<void>(`${session(id)}/documents/${encodeURIComponent(documentId)}`, {
       method: "DELETE",
     }),
+  /** The end-of-session recap, written from the transcript the browser sends. */
+  recap: (input: RecapInput) => request<SessionRecap>("/api/recap", json("POST", input)),
   documentsUrl: (id: string) => `${baseUrl()}${session(id)}/documents`,
   /** `WS /ws/sessions/{id}`: final turns in, translations and answers out. */
   socketUrl: (id: string) => `${baseUrl().replace(/^http/, "ws")}/ws/sessions/${encodeURIComponent(id)}`,

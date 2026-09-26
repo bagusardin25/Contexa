@@ -5,8 +5,10 @@ import type { DocumentUpdate, DocumentUploader } from "@/lib/documents/uploader"
 import { validateFile } from "@/lib/documents/validate";
 import { createId } from "@/lib/utils";
 import type {
+  AnswerStyle,
   ContextDocument,
   PartialTurn,
+  RecapState,
   SessionConfig,
   SessionError,
   SessionEvent,
@@ -33,6 +35,10 @@ export interface SessionState {
   audioLevel: number;
   /** Keyterms the live stream sent to AssemblyAI; empty in the preview. */
   streamKeyterms: string[];
+  /** The AI recap, written once the session stops. */
+  recap: RecapState;
+  /** The recording for the `file` audio source; kept across sessions like the config. */
+  audioFile: File | null;
 }
 
 export interface RejectedFile {
@@ -42,12 +48,15 @@ export interface RejectedFile {
 
 export interface SessionActions {
   updateConfig: (patch: Partial<SessionConfig>) => void;
+  setAudioFile: (file: File | null) => void;
   start: () => Promise<void>;
   stop: () => Promise<void>;
   newSession: () => void;
-  /** Manual "Generate answer". Defaults to the most recent final turn. */
-  requestAnswer: (turnId?: string) => void;
+  /** Manual "Generate answer". Defaults to the most recent final turn; a new `style` redrafts. */
+  requestAnswer: (turnId?: string, style?: AnswerStyle) => void;
   retryTranslation: (turnId: string) => void;
+  /** Writes the recap of a stopped session; runs on its own when the session stops. */
+  generateRecap: () => Promise<void>;
   selectSuggestion: (suggestionId: string) => void;
   addFiles: (files: File[], options?: { sample?: boolean }) => RejectedFile[];
   addSampleDocuments: () => void;
@@ -66,6 +75,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   responseLanguage: "auto",
   audioSource: "tab",
   speakerLabels: true,
+  answerStyle: "professional",
 };
 
 const EMPTY_SESSION = {
@@ -80,7 +90,8 @@ const EMPTY_SESSION = {
   activeSuggestionId: null,
   audioLevel: 0,
   streamKeyterms: [],
-} satisfies Omit<SessionState, "config" | "documents">;
+  recap: { status: "idle" },
+} satisfies Omit<SessionState, "config" | "documents" | "audioFile">;
 
 const UNKNOWN_ERROR: SessionError = {
   code: "unknown",
@@ -198,9 +209,9 @@ export function applyEvent(
       if (!turn) return {};
       const suggestions = { ...state.suggestions };
       let order = state.suggestionOrder;
-      // A retried answer replaces the failed attempt for the same turn.
+      // A retry, or a redraft in another style, replaces the turn's previous answer.
       const previous = turn.suggestionId ? suggestions[turn.suggestionId] : undefined;
-      if (previous?.stage === "failed") {
+      if (previous) {
         delete suggestions[previous.id];
         order = order.filter((id) => id !== previous.id);
       }
@@ -208,6 +219,7 @@ export function applyEvent(
         id: event.suggestionId,
         turnId: event.turnId,
         trigger: event.trigger,
+        style: event.style,
         stage: "retrieving",
         evidence: null,
         answer: null,
@@ -257,19 +269,28 @@ export function createSessionStore({
   transport: SessionTransport;
   uploader: DocumentUploader;
 }) {
+  // Bumped by New session so a late recap can't land in the next conversation.
+  let recapRun = 0;
+
   const store = createStore<SessionStore>()((set, get) => ({
     config: DEFAULT_CONFIG,
     documents: [],
+    audioFile: null,
     ...EMPTY_SESSION,
 
     updateConfig: (patch) => set((state) => ({ config: { ...state.config, ...patch } })),
+
+    setAudioFile: (audioFile) => set({ audioFile }),
 
     start: async () => {
       const { status, startedAt, config } = get();
       const canStart = status === "idle" || (status === "error" && startedAt === null);
       if (!canStart) return;
       set({ error: null });
-      await transport.start(config, { getDocuments: () => get().documents });
+      await transport.start(config, {
+        getDocuments: () => get().documents,
+        getAudioFile: () => get().audioFile,
+      });
     },
 
     stop: async () => {
@@ -277,20 +298,22 @@ export function createSessionStore({
     },
 
     newSession: () => {
+      recapRun += 1;
       transport.reset();
       set({ ...EMPTY_SESSION });
     },
 
-    requestAnswer: (turnId) => {
+    requestAnswer: (turnId, style) => {
       const { turns, suggestions } = get();
       const turn = turnId ? turns.find((item) => item.id === turnId) : turns.at(-1);
       if (!turn) return;
       const existing = turn.suggestionId ? suggestions[turn.suggestionId] : undefined;
-      if (existing && existing.stage !== "failed") {
+      const restyle = style !== undefined && existing !== undefined && existing.style !== style;
+      if (existing && existing.stage !== "failed" && !restyle) {
         set({ activeSuggestionId: existing.id });
         return;
       }
-      transport.requestAnswer(turn.id);
+      transport.requestAnswer(turn.id, style);
     },
 
     retryTranslation: (turnId) => {
@@ -298,6 +321,31 @@ export function createSessionStore({
         turns: patchTurn(state.turns, turnId, { translation: { status: "pending" } }),
       }));
       transport.retryTranslation(turnId);
+    },
+
+    generateRecap: async () => {
+      const { status, turns, config, recap } = get();
+      const spoken = turns.filter((turn) => turn.text.trim());
+      if (status !== "stopped" || spoken.length === 0 || recap.status === "loading") return;
+      const run = ++recapRun;
+      const language = config.displayLanguage;
+      set({ recap: { status: "loading" } });
+      try {
+        const result = await transport.recap({
+          title: config.title.trim(),
+          language,
+          turns: spoken.map((turn) => ({
+            speaker: turn.speaker,
+            text: turn.text,
+            type: turn.classification?.type ?? null,
+          })),
+        });
+        if (run === recapRun) set({ recap: { status: "ready", recap: result, language } });
+      } catch (error) {
+        if (run !== recapRun) return;
+        const message = error instanceof Error ? error.message : "Couldn't write the recap.";
+        set({ recap: { status: "failed", message } });
+      }
     },
 
     selectSuggestion: (suggestionId) => set({ activeSuggestionId: suggestionId }),
@@ -363,6 +411,9 @@ export function createSessionStore({
     },
   }));
 
-  transport.subscribe((event) => store.setState((state) => applyEvent(state, event)));
+  transport.subscribe((event) => {
+    store.setState((state) => applyEvent(state, event));
+    if (event.type === "status" && event.status === "stopped") void store.getState().generateRecap();
+  });
   return store;
 }

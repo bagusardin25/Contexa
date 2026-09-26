@@ -122,6 +122,7 @@ def test_create_and_get_session_uses_camel_case(client: TestClient) -> None:
         "displayLanguage": "id",
         "responseLanguage": "auto",
         "speakerLabels": True,
+        "answerStyle": "professional",
     }
     assert client.get("/api/sessions/ses_missing").status_code == 404
     assert client.post("/api/sessions", json={"displayLanguage": "fr"}).status_code == 422
@@ -332,7 +333,8 @@ def stream_query(client: TestClient, session_id: str) -> tuple[dict[str, Any], d
 def test_update_session_changes_only_what_was_sent(client: TestClient) -> None:
     session_id = create_session(client, title="Demo", speakerLanguage="en")
     body = client.patch(
-        f"/api/sessions/{session_id}", json={"speakerLanguage": "ja", "displayLanguage": "en"}
+        f"/api/sessions/{session_id}",
+        json={"speakerLanguage": "ja", "displayLanguage": "en", "answerStyle": "technical"},
     ).json()
     assert body["config"] == {
         "title": "Demo",
@@ -340,7 +342,10 @@ def test_update_session_changes_only_what_was_sent(client: TestClient) -> None:
         "displayLanguage": "en",
         "responseLanguage": "auto",
         "speakerLabels": True,
+        "answerStyle": "technical",
     }
+    bad_style = client.patch(f"/api/sessions/{session_id}", json={"answerStyle": "poetic"})
+    assert bad_style.status_code == 422
     assert body["speechModel"] == "universal-3-5-pro"
     assert (
         client.patch(f"/api/sessions/{session_id}", json={"displayLanguage": "fr"}).status_code
@@ -504,3 +509,42 @@ def test_hallucinated_citations_are_dropped(client: TestClient, fake_llm: FakeLL
         ws.send_json(turn("t1", "How do you handle concurrent updates?"))
         ready = receive_until(ws, "suggestion_ready")[-1]
     assert len(ready["answer"]["usedContext"]) == 1
+
+
+def test_answer_styles_shape_the_prompt_and_restyle_replaces(
+    client: TestClient, fake_llm: FakeLLM
+) -> None:
+    fake_llm.responses["turn_analysis"] = STATEMENT_ANALYSIS
+    session_id = create_session(client, answerStyle="concise")
+
+    with client.websocket_connect(f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}) as ws:
+        ws.send_json(turn("t1", "Welcome back, everyone."))
+        receive_until(ws, "turn_classified")
+        ws.send_json({"type": "request_answer", "turnId": "t1"})
+        first = receive_until(ws, "suggestion_ready")
+        # Same style again: the existing answer stands, nothing is redrafted.
+        ws.send_json({"type": "request_answer", "turnId": "t1", "style": "concise"})
+        ws.send_json({"type": "request_answer", "turnId": "t1", "style": "technical"})
+        second = receive_until(ws, "suggestion_ready")
+
+    assert first[0]["style"] == "concise" and second[0]["style"] == "technical"
+    prompts = [call["messages"][0]["content"] for call in fake_llm.calls("grounded_answer")]
+    assert len(prompts) == 2
+    assert "one or two short sentences" in prompts[0]
+    assert "name the mechanisms, components, and trade-offs" in prompts[1]
+    suggestions = client.get(f"/api/sessions/{session_id}/turns").json()["suggestions"]
+    assert [(s["id"], s["style"]) for s in suggestions] == [
+        (second[0]["suggestionId"], "technical")
+    ]
+
+    # The HTTP route takes a style too; a bad one is rejected.
+    answer = client.post(
+        f"/api/sessions/{session_id}/answer", json={"turnId": "t1", "style": "casual"}
+    ).json()
+    assert answer["style"] == "casual"
+    assert (
+        "friendly, conversational"
+        in fake_llm.calls("grounded_answer")[-1]["messages"][0]["content"]
+    )
+    bad = client.post(f"/api/sessions/{session_id}/answer", json={"turnId": "t1", "style": "x"})
+    assert bad.status_code == 422

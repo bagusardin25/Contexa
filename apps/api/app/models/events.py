@@ -10,6 +10,7 @@ from pydantic import Field, TypeAdapter
 
 from .base import CamelModel
 from .session import (
+    AnswerStyle,
     Evidence,
     SuggestedAnswer,
     SuggestionTrigger,
@@ -29,6 +30,8 @@ class TurnFinalMessage(CamelModel):
 class RequestAnswerMessage(CamelModel):
     type: Literal["request_answer"]
     turn_id: str = Field(min_length=1, max_length=64)
+    # Another style redrafts an existing answer; empty = the session's style.
+    style: AnswerStyle | None = None
 
 
 class RetryTranslationMessage(CamelModel):
@@ -69,6 +72,7 @@ class SuggestionStarted(CamelModel):
     suggestion_id: str
     turn_id: str
     trigger: SuggestionTrigger
+    style: AnswerStyle
     created_at_ms: int
 
 

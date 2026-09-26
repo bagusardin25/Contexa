@@ -33,6 +33,8 @@ Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT (Universa
   OpenAI-compatible API (Groq, OpenRouter, Gemini, OpenAI, a local server), so the whole app
   runs on free tiers.
 - Each step fails on its own, so the live transcript keeps working if an answer fails.
+- When the session stops, one more LLM call writes a recap: summary, key points, action items,
+  and open questions, in your language.
 
 ## Repository structure
 
@@ -95,6 +97,10 @@ Contexa/
       Without `NEXT_PUBLIC_API_URL` the UI runs a clearly labelled scripted preview.
 - [x] LLM provider of your choice: AssemblyAI LLM Gateway, Groq, OpenRouter, Gemini, OpenAI, or
       any OpenAI-compatible API, with fallbacks for models without structured outputs
+- [x] Session recap (summary, key points, action items, open questions), a recording as a third
+      audio source, and a scripted preview at `/session?preview` for when the API is asleep
+- [x] Answer styles (Concise, Professional, Technical, Casual) with one-click redrafts, and
+      **Listen** to hear the ready-to-say answer (browser text-to-speech)
 - [ ] First run with real keys (the smoke test below checks each call)
 - [ ] Persistence and semantic retrieval (Supabase + pgvector)
 - [ ] Deployment (Vercel for the web app, a WebSocket-capable host such as Render or Fly.io for the API)
@@ -189,11 +195,15 @@ Open http://localhost:3000/session in Chrome or Edge.
 3. Pick **Microphone**, press **Start listening**, and ask: *"How does your app handle concurrent
    updates when two people edit the same note?"* Expect the transcript, the Indonesian
    translation, a *Question* badge, evidence from `notewave-architecture.md`, and a suggested
-   answer plus a ready-to-say version.
+   answer plus a ready-to-say version. The answer's style menu redrafts it (say, *Concise*), and
+   **Listen** reads the ready-to-say version aloud.
 4. Pick **Browser tab**, play an English or Japanese video in another tab, and share that tab
-   with **Share tab audio** on.
-5. Press **Stop session**: the summary shows turns, questions, and average answer time;
-   **Export .md** downloads the transcript; **New session** keeps the documents.
+   with **Share tab audio** on. Or pick **Audio file** and choose a recording (MP3, WAV, M4A,
+   WebM, MP4): it plays aloud through the same pipeline and the session stops when it ends,
+   which makes a demo you can repeat exactly.
+5. Press **Stop session**: the summary shows turns, questions, and average answer time, and a
+   recap follows (summary, key points, action items, open questions); **Export .md** downloads
+   the transcript with the recap; **New session** keeps the documents.
 
 Failure handling worth trying: stop the API (red banner, clear upload and start errors, both
 retryable once it's back), empty `ASSEMBLYAI_API_KEY` or `LLM_API_KEY` (warning banner; the
@@ -208,7 +218,9 @@ transcript keeps running when a translation or answer fails, and each failure ha
 | Translations fail with HTTP 401/403 from Groq, OpenRouter, Gemini, or OpenAI | `LLM_API_KEY` is wrong or for another provider. |
 | Some turns fail with HTTP 429 | A free-tier rate limit: requests or tokens per minute, or the daily cap. One retry is automatic; keep `LLM_REASONING_EFFORT=low`, use a smaller `LLM_FAST_MODEL`, or wait. |
 | "The model used up its token budget" | A reasoning model spent its tokens thinking. Set `LLM_REASONING_EFFORT=low` or pick a non-reasoning model. |
-| "Can't reach the Contexa API" | The API isn't running, `NEXT_PUBLIC_API_URL` points elsewhere, or `CORS_ORIGINS` doesn't list the page's origin. |
+| "Can't reach the Contexa API" | The API isn't running, `NEXT_PUBLIC_API_URL` points elsewhere, or `CORS_ORIGINS` doesn't list the page's origin. The page keeps retrying for two minutes, and **Open the preview** shows the scripted version meanwhile. |
+| "Waking up the Contexa API…" | Free hosting put the API to sleep; the first request takes up to a minute and the page continues on its own. |
+| "This browser can't play" a recording | Use MP3, WAV, M4A, or WebM; MP4/AAC needs Chrome or Edge rather than Chromium. |
 | "AssemblyAI didn't start the stream" | The reason is shown; code 1006 usually means a bad key or no balance. Run the smoke test. |
 | No audio from a shared tab | Share a tab (not a window) in Chrome or Edge with **Share tab audio** on. Firefox and Safari can't share tab audio: use the microphone. |
 | A model id is rejected | The smoke test lists the provider's model ids; set `LLM_MODEL` / `LLM_FAST_MODEL` to one of them. OpenRouter's `:free` models change over time. |

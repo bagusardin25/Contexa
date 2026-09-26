@@ -102,7 +102,7 @@ JSON is camelCase to match the web app's TypeScript types.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/sessions` | Create a session (`speakerLanguage`, `displayLanguage`, `responseLanguage`, `speakerLabels`, `title`) |
+| `POST` | `/api/sessions` | Create a session (`speakerLanguage`, `displayLanguage`, `responseLanguage`, `speakerLabels`, `answerStyle`, `title`) |
 | `GET` | `/api/sessions/{id}` | Session, speech model, documents, turn count, current `keyterms` |
 | `PATCH` | `/api/sessions/{id}` | Change any of the settings above; unsent fields stay |
 | `POST` | `/api/sessions/{id}/reset` | New conversation: turns and answers cleared, documents kept |
@@ -111,7 +111,8 @@ JSON is camelCase to match the web app's TypeScript types.
 | `POST` | `/api/sessions/{id}/stream-token` | AssemblyAI token plus a ready-to-open `websocketUrl` and the `keyterms` it carries |
 | `POST` | `/api/sessions/{id}/documents` | Upload PDF, DOCX, MD, or TXT (multipart `file`, optional `documentId`, max 10 MB); returns status, chunks, and `keyterms` |
 | `DELETE` | `/api/sessions/{id}/documents/{docId}` | Remove a document from retrieval and keyterms |
-| `POST` | `/api/sessions/{id}/answer` | Manual "Generate answer" for a turn (`{"turnId": "..."}`) |
+| `POST` | `/api/sessions/{id}/answer` | Manual "Generate answer" for a turn (`{"turnId": "...", "style": "technical"}`; a new `style` redrafts an existing answer) |
+| `POST` | `/api/recap` | Recap of a finished conversation from the transcript the browser sends (`title`, `language`, `turns` with `speaker`, `text`, `type`): `summary`, `keyPoints`, `actionItems`, `openQuestions`. 503 without an LLM, 502 with the provider's reason. |
 | `GET` | `/health` | Liveness, whether AssemblyAI is configured, and the LLM provider, its models, and any configuration problem |
 
 ## WebSocket protocol: `/ws/sessions/{id}`
@@ -123,10 +124,14 @@ Browser → server:
 ```json
 {"type": "turn_final", "turn": {"id": "s1-t7", "speaker": "B", "text": "How do you handle concurrent updates?", "detectedLanguage": "en", "startedAtMs": 41000, "endedAtMs": 44800}}
 {"type": "request_answer", "turnId": "s1-t7"}
+{"type": "request_answer", "turnId": "s1-t7", "style": "concise"}
 {"type": "retry_translation", "turnId": "s1-t7"}
 ```
 
 A `turn_final` for a turn the server already has is ignored, so clients can safely re-send.
+`request_answer` returns the existing answer unless it failed or names another `style`
+(`concise`, `professional`, `technical`, `casual`; the session's `answerStyle` by default),
+which drafts a replacement.
 
 Server → browser. These match `SessionEvent` in `apps/web/types/session.ts`:
 
@@ -140,7 +145,7 @@ messages.
 app/
   api/           REST routes and the WebSocket
   assemblyai/    speech-model routing, streaming tokens
-  conversation/  final-turn pipeline (analysis → retrieval → answer)
+  conversation/  final-turn pipeline (analysis → retrieval → answer) and the session recap
   documents/     upload validation, parsing, chunking, keyterms
   rag/           tokenizer and BM25 index (lexical fallback per PRD §16)
   llm/           LLM client (AssemblyAI LLM Gateway or OpenAI-compatible) and prompts

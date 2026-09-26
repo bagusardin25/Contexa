@@ -25,6 +25,7 @@ from app.models.events import (
     TurnClassified,
 )
 from app.models.session import (
+    AnswerStyle,
     ContextRef,
     Evidence,
     SuggestedAnswer,
@@ -179,19 +180,27 @@ class TurnPipeline:
         turn_id: str,
         trigger: SuggestionTrigger,
         emit: Emit = _discard,
+        *,
+        style: AnswerStyle | None = None,
     ) -> SuggestionOut | None:
-        """Retrieve evidence and draft a grounded answer for one turn (FR-008 to FR-012)."""
+        """Retrieve evidence and draft a grounded answer for one turn (FR-008 to FR-012).
+
+        An existing answer is kept unless it failed or another `style` is asked for; then a
+        new draft replaces it.
+        """
         turn = session.turns.get(turn_id)
         if turn is None:
             return None
         existing = session.suggestions.get(turn.suggestion_id or "")
-        if existing is not None and existing.stage != "failed":
+        restyle = style is not None and existing is not None and existing.style != style
+        if existing is not None and existing.stage != "failed" and not restyle:
             return existing
 
         suggestion = SuggestionOut(
             id=new_id("sug"),
             turn_id=turn.id,
             trigger=trigger,
+            style=style or session.config.answer_style,
             stage="retrieving",
             created_at_ms=turn.ended_at_ms,
         )
@@ -205,6 +214,7 @@ class TurnPipeline:
                 suggestion_id=suggestion.id,
                 turn_id=turn.id,
                 trigger=trigger,
+                style=suggestion.style,
                 created_at_ms=suggestion.created_at_ms,
             )
         )
@@ -222,6 +232,7 @@ class TurnPipeline:
             speaker=turn.speaker,
             preferred_language=preferred,
             target_language=target,
+            style=suggestion.style,
             excerpts=[
                 Excerpt(
                     label=label, source=f"{item.document_name} · {item.location}", text=item.snippet

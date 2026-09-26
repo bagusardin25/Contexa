@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   CheckIcon,
+  ChevronDownIcon,
   CircleCheckIcon,
   CircleIcon,
   CircleXIcon,
@@ -14,17 +15,27 @@ import {
   MessageSquareQuoteIcon,
   RotateCwIcon,
   SparklesIcon,
+  SquareIcon,
   TriangleAlertIcon,
+  Volume2Icon,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCopy } from "@/hooks/use-copy";
+import { ANSWER_STYLES, ANSWER_STYLE_ORDER } from "@/lib/answer-styles";
 import { formatClock, formatLatency, formatPercent, pluralize } from "@/lib/format";
 import { languageName, resolveResponseLanguage } from "@/lib/languages";
 import { cn } from "@/lib/utils";
-import type { Evidence, Suggestion, SuggestionStage, Turn } from "@/types/session";
+import type { AnswerStyle, Evidence, Suggestion, SuggestionStage, Turn } from "@/types/session";
 
 import { HighlightedText, LanguageTag, PanelHeader, speakerName } from "./primitives";
 import { useIsPreview, useSession } from "./session-store-provider";
@@ -208,6 +219,13 @@ function SuggestionCard({ suggestion, turn }: { suggestion: Suggestion; turn: Tu
             title="Suggested answer"
             language={preferredLanguage}
             loading={!answer}
+            action={
+              <StyleMenu
+                style={suggestion.style}
+                disabled={stage !== "ready"}
+                onRedraft={(style) => requestAnswer(turn.id, style)}
+              />
+            }
           >
             {answer ? (
               <p lang={preferredLanguage} className="text-sm leading-relaxed">
@@ -298,22 +316,131 @@ function AnswerSection({
   title,
   language,
   loading,
+  action,
   children,
 }: {
   title: string;
   language: string;
   loading: boolean;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="rounded-xl border bg-card p-4">
-      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        {title}
-        <LanguageTag code={language} />
-        <span className="sr-only">in {languageName(language)}</span>
-      </h3>
+      <div className="mb-2 flex items-center gap-2">
+        <h3 className="flex items-center gap-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          {title}
+          <LanguageTag code={language} />
+          <span className="sr-only">in {languageName(language)}</span>
+        </h3>
+        {action ? <div className="ml-auto">{action}</div> : null}
+      </div>
       {loading ? <SkeletonLines /> : children}
     </section>
+  );
+}
+
+/** Shows the answer's style and redrafts it in another one. */
+function StyleMenu({
+  style,
+  disabled,
+  onRedraft,
+}: {
+  style: AnswerStyle;
+  disabled: boolean;
+  onRedraft: (style: AnswerStyle) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={disabled}
+          aria-label={`Answer style: ${ANSWER_STYLES[style].label}. Redraft in another style`}
+          className="h-6 gap-1 px-2 text-[11px] text-muted-foreground"
+        >
+          {ANSWER_STYLES[style].label}
+          <ChevronDownIcon className="size-3 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+          Redraft this answer as…
+        </DropdownMenuLabel>
+        {ANSWER_STYLE_ORDER.map((option) => (
+          <DropdownMenuItem
+            key={option}
+            disabled={option === style}
+            onSelect={() => onRedraft(option)}
+            className="flex-col items-start gap-0.5"
+          >
+            <span className="font-medium">{ANSWER_STYLES[option].label}</span>
+            <span className="text-xs text-muted-foreground">{ANSWER_STYLES[option].description}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+const SPEECH_LOCALES: Record<string, string> = { id: "id-ID", en: "en-US", ja: "ja-JP" };
+const subscribeNever = () => () => {};
+
+/** Reads the ready-to-say answer aloud with the browser's own voices (Web Speech API). */
+function ListenButton({ text, language }: { text: string | null; language: string }) {
+  const supported = useSyncExternalStore(
+    subscribeNever,
+    () => "speechSynthesis" in window,
+    () => false,
+  );
+  const [speaking, setSpeaking] = useState(false);
+  const speakingRef = useRef(false);
+
+  useEffect(
+    () => () => {
+      // Leaving the card (or a new answer replacing it) stops the voice.
+      if (speakingRef.current) window.speechSynthesis.cancel();
+    },
+    [text],
+  );
+
+  if (!supported) return null;
+
+  const toggle = () => {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    if (speaking || !text) {
+      speakingRef.current = false;
+      setSpeaking(false);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = SPEECH_LOCALES[language] ?? language;
+    const prefix = language.toLowerCase();
+    const voice = synth.getVoices().find((item) => item.lang.toLowerCase().startsWith(prefix));
+    if (voice) utterance.voice = voice;
+    utterance.onend = utterance.onerror = () => {
+      speakingRef.current = false;
+      setSpeaking(false);
+    };
+    speakingRef.current = true;
+    setSpeaking(true);
+    synth.speak(utterance);
+  };
+
+  return (
+    <Button
+      size="xs"
+      variant="outline"
+      disabled={!text}
+      aria-pressed={speaking}
+      onClick={toggle}
+      className="border-primary/30 bg-transparent"
+    >
+      {speaking ? <SquareIcon /> : <Volume2Icon />}
+      {speaking ? "Stop" : "Listen"}
+    </Button>
   );
 }
 
@@ -326,10 +453,11 @@ function ReadyToSay({ text, language }: { text: string | null; language: string 
         <MessageSquareQuoteIcon className="size-4 text-primary" aria-hidden />
         <h3 className="text-xs font-semibold tracking-wide text-primary uppercase">Ready to say</h3>
         <LanguageTag code={language} className="border-primary/30 text-primary" />
+        <span className="ml-auto" />
+        <ListenButton text={text} language={language} />
         <Button
           size="xs"
           variant={copied ? "secondary" : "default"}
-          className="ml-auto"
           disabled={!text}
           onClick={() => {
             if (text) void copy(text);

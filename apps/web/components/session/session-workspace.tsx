@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { useSessionMode } from "@/lib/session/mode";
 import { cn } from "@/lib/utils";
 
 import { ContextPanel } from "./context-panel";
@@ -21,8 +22,9 @@ import { SetupPanel } from "./setup-panel";
 type WorkspacePanel = "conversation" | "copilot" | "context";
 
 export function SessionWorkspace() {
+  const mode = useSessionMode();
   return (
-    <SessionStoreProvider>
+    <SessionStoreProvider key={mode} mode={mode}>
       <Workspace />
     </SessionStoreProvider>
   );

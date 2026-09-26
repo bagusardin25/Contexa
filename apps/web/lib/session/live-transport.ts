@@ -2,7 +2,9 @@ import { ApiError, api } from "@/lib/api/client";
 import type { ApiSessionManager } from "@/lib/api/session";
 import { speakerLanguageOption, speechModelFor } from "@/lib/languages";
 import type {
+  AnswerStyle,
   FinalTurnPayload,
+  RecapInput,
   SessionConfig,
   SessionError,
   SessionEvent,
@@ -10,12 +12,14 @@ import type {
 
 import {
   CaptureError,
+  type FilePlayback,
   type PcmPipeline,
   captureAudio,
+  loadAudioFile,
   releaseStream,
   startPcmPipeline,
 } from "./audio-capture";
-import type { SessionTransport } from "./transport";
+import type { SessionTransport, TransportContext } from "./transport";
 
 type Listener = (event: SessionEvent) => void;
 
@@ -61,6 +65,8 @@ const SERVER_EVENT_TYPES = new Set<string>([
 const BEGIN_TIMEOUT_MS = 10_000;
 const TERMINATE_TIMEOUT_MS = 3_000;
 const MAX_RECONNECTS = 3;
+// After a recording ends, a moment of silence lets AssemblyAI close the last turn.
+const END_OF_FILE_GRACE_MS = 2_000;
 /** Audio kept while the AssemblyAI socket (re)connects, in 50 ms frames. */
 const BUFFERED_FRAMES = 20;
 const TRANSLATION_TIMEOUT_MS = 30_000;
@@ -219,6 +225,8 @@ export class LiveTransport implements SessionTransport {
   private config: SessionConfig | null = null;
   private audioContext: AudioContext | null = null;
   private media: MediaStream | null = null;
+  /** The recording, when the audio source is a file. */
+  private playback: FilePlayback | null = null;
   private pipeline: PcmPipeline | null = null;
   private stt: WebSocket | null = null;
   private sttReady = false;
@@ -252,7 +260,7 @@ export class LiveTransport implements SessionTransport {
     };
   }
 
-  async start(config: SessionConfig) {
+  async start(config: SessionConfig, context: TransportContext) {
     if (this.phase !== "idle") return;
     const run = ++this.run;
     this.phase = "starting";
@@ -274,8 +282,18 @@ export class LiveTransport implements SessionTransport {
     this.audioContext = audioContext;
 
     let media: MediaStream;
+    let playback: FilePlayback | null = null;
     try {
-      media = await captureAudio(config.audioSource);
+      if (config.audioSource === "file") {
+        const file = context.getAudioFile();
+        if (!file) {
+          throw new CaptureError({ code: "unknown", message: "Choose a recording to play first." });
+        }
+        playback = await loadAudioFile(audioContext, file);
+        media = playback.stream;
+      } else {
+        media = await captureAudio(config.audioSource);
+      }
     } catch (error) {
       if (run === this.run) {
         this.fail(error instanceof CaptureError ? error.error : { code: "unknown", message: describe(error) });
@@ -283,10 +301,17 @@ export class LiveTransport implements SessionTransport {
       return;
     }
     if (run !== this.run) {
+      playback?.release();
       releaseStream(media);
       return;
     }
     this.media = media;
+    this.playback = playback;
+    playback?.element.addEventListener("ended", () => {
+      window.setTimeout(() => {
+        if (run === this.run) void this.stop();
+      }, END_OF_FILE_GRACE_MS);
+    });
     // "Stop sharing" in the browser's bar ends the session like the Stop button.
     media.getAudioTracks()[0]?.addEventListener("ended", () => {
       if (run === this.run) void this.stop();
@@ -334,9 +359,13 @@ export class LiveTransport implements SessionTransport {
     this.session.reset();
   }
 
-  requestAnswer(turnId: string) {
+  requestAnswer(turnId: string, style?: AnswerStyle) {
     this.resend(turnId);
-    this.channel.send({ type: "request_answer", turnId });
+    this.channel.send({ type: "request_answer", turnId, ...(style ? { style } : {}) });
+  }
+
+  recap(input: RecapInput) {
+    return api.recap(input);
   }
 
   retryTranslation(turnId: string) {
@@ -382,6 +411,8 @@ export class LiveTransport implements SessionTransport {
     this.stopWatchingDocuments = null;
     this.pipeline?.close();
     this.pipeline = null;
+    this.playback?.release();
+    this.playback = null;
     releaseStream(this.media);
     this.media = null;
     const context = this.audioContext;
@@ -443,6 +474,19 @@ export class LiveTransport implements SessionTransport {
     this.phase = "streaming";
     this.emit({ type: "status", status: "listening" });
     for (const frame of this.buffered.splice(0)) socket.send(frame);
+    this.resumePlayback();
+  }
+
+  /** A recording plays only while AssemblyAI is listening, so none of it is lost. */
+  private resumePlayback() {
+    const element = this.playback?.element;
+    if (!element || !element.paused || element.ended) return;
+    element.play().catch(() =>
+      this.fail({
+        code: "unknown",
+        message: "The browser wouldn't play the recording. Press Start again.",
+      }),
+    );
   }
 
   private async onSttClosed(run: number, event: CloseEvent, begun: boolean) {
@@ -463,6 +507,7 @@ export class LiveTransport implements SessionTransport {
       });
       return;
     }
+    this.playback?.element.pause(); // resumes on the next Begin
     while (this.reconnects < MAX_RECONNECTS) {
       this.reconnects += 1;
       this.phase = "starting";

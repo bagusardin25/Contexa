@@ -92,6 +92,60 @@ export function releaseStream(stream: MediaStream | null) {
   if (stream) stopStream(stream);
 }
 
+export interface FilePlayback {
+  /** The recording as a stream, for the PCM pipeline. */
+  stream: MediaStream;
+  element: HTMLAudioElement;
+  release(): void;
+}
+
+const FILE_LOAD_TIMEOUT_MS = 15_000;
+
+/**
+ * Loads a local recording into the audio graph: it plays through the speakers, so you
+ * hear what is transcribed, and feeds the PCM pipeline as a stream. It stays paused
+ * until the caller plays it, so the beginning isn't lost while AssemblyAI connects.
+ */
+export async function loadAudioFile(context: AudioContext, file: File): Promise<FilePlayback> {
+  const url = URL.createObjectURL(file);
+  const element = new Audio();
+  element.preload = "auto";
+  element.src = url;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => reject(new Error("timeout")), FILE_LOAD_TIMEOUT_MS);
+      element.addEventListener("canplay", () => (window.clearTimeout(timer), resolve()), { once: true });
+      element.addEventListener("error", () => (window.clearTimeout(timer), reject(new Error("decode"))), {
+        once: true,
+      });
+    });
+  } catch {
+    element.removeAttribute("src");
+    URL.revokeObjectURL(url);
+    throw new CaptureError({
+      code: "unknown",
+      message: `This browser can't play “${file.name}”. Try an MP3, WAV, M4A, WebM, or MP4 file.`,
+    });
+  }
+
+  const source = context.createMediaElementSource(element);
+  const destination = context.createMediaStreamDestination();
+  source.connect(destination);
+  source.connect(context.destination);
+  return {
+    stream: destination.stream,
+    element,
+    release() {
+      element.pause();
+      source.disconnect();
+      stopStream(destination.stream);
+      element.removeAttribute("src");
+      element.load();
+      URL.revokeObjectURL(url);
+    },
+  };
+}
+
 export interface PcmPipeline {
   close(): void;
 }

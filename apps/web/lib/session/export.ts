@@ -15,9 +15,22 @@ export function transcriptToMarkdown(state: SessionState) {
     `- Speaker language: ${speakerLanguageOption(config.speakerLanguage).label}`,
     `- Read in: ${languageName(config.displayLanguage)}`,
     "",
-    "## Transcript",
-    "",
   );
+
+  if (state.recap.status === "ready") {
+    const { summary, keyPoints, actionItems, openQuestions } = state.recap.recap;
+    lines.push("## Recap", "", summary, "");
+    for (const [heading, items] of [
+      ["Key points", keyPoints],
+      ["Action items", actionItems],
+      ["Open questions", openQuestions],
+    ] as const) {
+      if (items.length === 0) continue;
+      lines.push(`### ${heading}`, "", ...items.map((item) => `- ${item}`), "");
+    }
+  }
+
+  lines.push("## Transcript", "");
 
   for (const turn of turns) {
     const speaker = turn.speaker ? `Speaker ${turn.speaker}` : "Speaker";
