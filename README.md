@@ -18,8 +18,10 @@ Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT (Universa
         │
         └── final turns ──► Contexa API (FastAPI)
                               ├─ translate + classify   (LLM, fast model)
-                              ├─ retrieve evidence      (BM25 over your documents)
+                              ├─ retrieve evidence      (BM25 + embeddings over your documents)
                               └─ grounded answer        (LLM: your language + ready-to-say)
+                                        │
+                     session ends ──► recap (LLM) ──► history (Postgres + pgvector)
 ```
 
 - Audio goes from the browser straight to AssemblyAI with a short-lived token from the API.
@@ -27,6 +29,10 @@ Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT (Universa
 - Your documents do double duty: their passages ground the answers, and their product names
   and technical terms go to AssemblyAI as keyterms, so the transcript spells them right.
   Adding or removing a document mid-session updates the stream without reconnecting.
+  Documents can be files (PDF, DOCX, Markdown, TXT) or links: a web page, a PDF on the web, or
+  a GitHub repository (its README and docs).
+- Retrieval fuses keyword search (BM25) with semantic search (embeddings, e.g. Gemini's free
+  tier), so a question asked in Indonesian or in other words still finds the right passage.
 - Partial transcripts only update the screen. Translation, question detection, and retrieval
   run on finished turns; the per-turn analysis uses a fast model, answers a stronger one.
 - Speech always runs on AssemblyAI. The LLM is your choice: the AssemblyAI LLM Gateway, or any
@@ -34,7 +40,10 @@ Browser tab / mic ──PCM16 16 kHz──► AssemblyAI Streaming STT (Universa
   runs on free tiers.
 - Each step fails on its own, so the live transcript keeps working if an answer fails.
 - When the session stops, one more LLM call writes a recap: summary, key points, action items,
-  and open questions, in your language.
+  and open questions, in your language. The session is then saved to your history (Postgres
+  with pgvector, e.g. Supabase), where every session can be searched by meaning.
+- **Pop out** keeps the latest turns and the ready-to-say answer in a small always-on-top
+  window over your meeting (Document Picture-in-Picture, Chrome and Edge).
 
 ## Repository structure
 
@@ -43,18 +52,21 @@ Contexa/
 ├── apps/
 │   ├── web/                    Next.js 16 frontend
 │   │   ├── app/                routes: / (landing page), /session (live workspace),
-│   │   │                       /login, /register, password reset, /auth/callback
+│   │   │                       /history, /login, /register, password reset, /auth/callback
 │   │   ├── components/
 │   │   │   ├── ui/             shadcn/ui-style primitives
 │   │   │   ├── landing/        landing page sections
 │   │   │   ├── auth/           sign-in forms, Google button, header account menu
-│   │   │   └── session/        workspace: setup, transcript, copilot, context, controls
+│   │   │   ├── session/        workspace: setup, transcript, copilot, context, controls,
+│   │   │   │                   floating window
+│   │   │   └── history/        saved sessions: list, search, one session in full
 │   │   ├── hooks/              small client hooks
 │   │   ├── lib/
 │   │   │   ├── session/        live transport (capture → AssemblyAI → API), preview
 │   │   │   │                   transport, audio capture, Zustand store
 │   │   │   ├── api/            API client and the shared backend session
 │   │   │   ├── documents/      upload validation, live and preview uploaders, samples
+│   │   │   ├── history/        history API client, device identity, saved-session builder
 │   │   │   ├── supabase/       Supabase clients for browser, server, and proxy
 │   │   │   └── auth/           form validation, error messages, safe redirects
 │   │   ├── public/
@@ -64,19 +76,20 @@ Contexa/
 │   │   └── types/              session types and the SessionEvent union
 │   └── api/                    FastAPI backend
 │       ├── app/
-│       │   ├── api/            REST routes and the WebSocket
+│       │   ├── api/            REST routes, the WebSocket, history, and sign-in checks
 │       │   ├── assemblyai/     speech-model routing, streaming tokens
 │       │   ├── conversation/   final-turn pipeline (analysis → retrieval → answer)
-│       │   ├── documents/      upload validation, parsing, chunking, keyterms
-│       │   ├── rag/            tokenizer and BM25 index
-│       │   ├── llm/            LLM client (LLM Gateway or OpenAI-compatible) and prompts
+│       │   ├── documents/      upload validation, parsing, chunking, keyterms, link import
+│       │   ├── rag/            tokenizer, BM25 index, vectors, hybrid (RRF) search
+│       │   ├── llm/            LLM and embeddings clients (OpenAI-compatible) and prompts
 │       │   ├── models/         Pydantic contracts (API, events, LLM outputs)
-│       │   ├── store/          in-memory session store
+│       │   ├── store/          in-memory session store; Postgres + pgvector history
 │       │   ├── config.py       settings from environment variables
 │       │   └── main.py         app factory
 │       ├── scripts/            smoke test for the first live run against AssemblyAI
 │       ├── tests/              pytest suite (AssemblyAI mocked)
 │       └── .env.example
+├── e2e/                        browser tests: fake AssemblyAI/LLM/web server + Playwright suite
 ├── docs/
 │   ├── PRD.md                  product requirements
 │   └── ASSEMBLYAI_IMPLEMENTATION_AND_HACKATHON_GUIDE.md
@@ -101,9 +114,16 @@ Contexa/
       audio source, and a scripted preview at `/session?preview` for when the API is asleep
 - [x] Answer styles (Concise, Professional, Technical, Casual) with one-click redrafts, and
       **Listen** to hear the ready-to-say answer (browser text-to-speech)
+- [x] Documents from links: web pages, PDFs on the web, and GitHub repositories (README + docs),
+      with an SSRF guard on every hop
+- [x] Semantic retrieval: embeddings (Gemini's free tier, OpenAI, or any OpenAI-compatible API)
+      fused with BM25 by reciprocal rank fusion
+- [x] Meeting history in Postgres + pgvector (Supabase works): saved when a session ends, listed
+      and searchable by meaning at `/history`, per signed-in account or per browser
+- [x] **Pop out**: a floating always-on-top window with the latest turns and the answer to say
+- [x] Browser tests: 29 Playwright scenarios against a fake AssemblyAI, LLM, web, and GitHub
 - [ ] First run with real keys (the smoke test below checks each call)
-- [ ] Persistence and semantic retrieval (Supabase + pgvector)
-- [ ] Deployment (Vercel for the web app, a WebSocket-capable host such as Render or Fly.io for the API)
+- [ ] Deployment (see [Deploy](#deploy))
 
 ## Run locally
 
@@ -124,10 +144,18 @@ speech (AssemblyAI) and one for the LLM that translates and answers.
 | `LLM_FAST_MODEL` | `openai/gpt-oss-20b` | Translation and question detection on every turn. Empty = `LLM_MODEL`. |
 | `LLM_REASONING_EFFORT` | `low` | For reasoning models: faster replies, fewer tokens. Empty = provider default. |
 | `CORS_ORIGINS` | `http://localhost:3000` | Web app origins allowed for HTTP and the WebSocket, comma-separated. `localhost` and `127.0.0.1` are different origins. |
+| `EMBEDDING_PROVIDER` | `gemini` | Semantic search: `gemini`, `openai`, `custom`, or `none`. Empty follows `LLM_PROVIDER` when that is `gemini` or `openai`. |
+| `EMBEDDING_API_KEY` | (Gemini key) | Free at aistudio.google.com. Needed with Groq or OpenRouter, which have no embeddings. |
+| `DATABASE_URL` | (optional) | Postgres with pgvector for the meeting history (Supabase: the session pooler connection string). Empty = no history. |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | (optional) | Same values as the web's `NEXT_PUBLIC_SUPABASE_*`: signed-in users' history follows their account. |
 
-Optional tuning: `STREAMING_TOKEN_TTL_SECONDS` (60), `STREAMING_MAX_SESSION_SECONDS` (3600),
-`STREAMING_TOKENS_PER_SESSION` (30), `LLM_TIMEOUT_SECONDS` (15), `MAX_UPLOAD_BYTES` (10 MB),
-`LLM_BASE_URL` (required for `custom`, e.g. `http://localhost:11434/v1` for Ollama).
+Optional: `EMBEDDING_MODEL` (`gemini-embedding-001` / `text-embedding-3-small`),
+`EMBEDDING_DIMENSIONS`, `EMBEDDING_BASE_URL` (for `custom`), `RETRIEVAL_MIN_SIMILARITY` (0.5),
+`GITHUB_TOKEN` (private repos, and more than 60 GitHub downloads an hour), `MAX_IMPORT_BYTES`
+(5 MB), `MAX_REPO_DOWNLOAD_BYTES` (30 MB), `STREAMING_TOKEN_TTL_SECONDS` (60),
+`STREAMING_MAX_SESSION_SECONDS` (3600), `STREAMING_TOKENS_PER_SESSION` (30),
+`LLM_TIMEOUT_SECONDS` (15), `MAX_UPLOAD_BYTES` (10 MB), `LLM_BASE_URL` (required for `custom`,
+e.g. `http://localhost:11434/v1` for Ollama).
 
 > **Free setup.** AssemblyAI's free credits cover speech-to-text (Universal-3.5 Pro Realtime
 > included) but not the LLM Gateway, so on a free account point the LLM at a free tier.
@@ -141,6 +169,10 @@ Optional tuning: `STREAMING_TOKEN_TTL_SECONDS` (60), `STREAMING_MAX_SESSION_SECO
 >
 > With a paid AssemblyAI account, `LLM_PROVIDER=assemblyai` uses the LLM Gateway
 > (`claude-sonnet-4-6` for answers, `claude-haiku-4-5` per turn; override with `LLM_MODEL`).
+>
+> The rest is free too: embeddings on Gemini's free tier (`EMBEDDING_PROVIDER=gemini` with a
+> key from aistudio.google.com), and the history on Supabase's free Postgres, which includes
+> pgvector.
 
 ### 2. Configure the web app: `apps/web/.env.local`
 
@@ -204,6 +236,15 @@ Open http://localhost:3000/session in Chrome or Edge.
 5. Press **Stop session**: the summary shows turns, questions, and average answer time, and a
    recap follows (summary, key points, action items, open questions); **Export .md** downloads
    the transcript with the recap; **New session** keeps the documents.
+6. **Paste a link** in the Context panel: a docs page, a PDF on the web, or a GitHub repository
+   (`https://github.com/owner/repo`). It turns *Ready* with its source link, and answers cite it.
+   With embeddings on, the setup notice ends with "semantic search on gemini-embedding-001" and
+   the panel says documents are searched "by keyword and by meaning".
+7. With `DATABASE_URL` set, the setup screen shows **Save to history** (on by default), and the
+   ended session says **Saved to history · Open**. `/history` lists every saved session and
+   searches them by meaning: a hit opens the session at that turn, with Export .md and Delete.
+8. While live in Chrome or Edge, **Pop out** opens a small window that stays on top of your
+   meeting with the latest turns, their translations, and the answer to say (Copy, Listen).
 
 Failure handling worth trying: stop the API (red banner, clear upload and start errors, both
 retryable once it's back), empty `ASSEMBLYAI_API_KEY` or `LLM_API_KEY` (warning banner; the
@@ -229,8 +270,22 @@ transcript keeps running when a translation or answer fails, and each failure ha
 
 ```bash
 cd apps/api && uv run pytest && uv run ruff check . && uv run ruff format --check .
-cd apps/web && npm run lint && npm run build
+cd apps/web && npm run lint && npx tsc --noEmit && npm run build
 ```
+
+The history tests need Postgres with pgvector; they create and drop a throwaway database:
+
+```bash
+docker run -d --name contexa-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:54329:5432 pgvector/pgvector:pg16
+cd apps/api && CONTEXA_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres uv run pytest
+```
+
+The browser suite is described in [e2e/README.md](e2e/README.md).
+
+## Deploy
+
+See [docs/DEPLOY.md](docs/DEPLOY.md): the API on Render (Docker, one worker for the WebSocket
+sessions), the web app on Vercel, and Supabase for sign-in and the history.
 
 ## Tech stack
 
@@ -240,7 +295,8 @@ cd apps/web && npm run lint && npm run build
 | Backend | FastAPI, Pydantic v2, httpx, pypdf, python-docx |
 | Speech | AssemblyAI Universal-3.5 Pro Realtime (`universal-3-5-pro`) with speaker labels and keyterms prompting; Whisper Streaming (`whisper-rt`) for Indonesian |
 | Reasoning | Any OpenAI-compatible LLM (Groq, OpenRouter, Gemini, OpenAI) or the AssemblyAI LLM Gateway, with strict JSON-schema outputs and fallbacks: `LLM_FAST_MODEL` per turn, `LLM_MODEL` for answers |
-| Retrieval | BM25 over document chunks (pgvector planned) |
+| Retrieval | BM25 fused with embeddings (reciprocal rank fusion); `gemini-embedding-001` on Gemini's free tier by default |
+| History | Postgres + pgvector (Supabase), asyncpg; semantic and full-text search over saved sessions |
 | Auth | Supabase Auth via `@supabase/ssr`: Google OAuth and email/password, PKCE, cookie sessions |
 
 ## Documentation
