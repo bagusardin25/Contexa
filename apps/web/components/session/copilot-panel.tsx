@@ -230,8 +230,8 @@ function SuggestionCard({ suggestion, turn }: { suggestion: Suggestion; turn: Tu
       )}
 
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        AI-generated suggestion. Check it before you say it.{" "}
-        {isPreview ? "Preview: scripted answer." : "Generated with the AssemblyAI LLM Gateway."}
+        AI-generated suggestion. Check it before you say it.
+        {isPreview ? " Preview: scripted answer." : null}
       </p>
     </article>
   );

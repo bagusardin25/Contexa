@@ -64,3 +64,11 @@ def test_custom_provider_needs_a_base_url() -> None:
     assert s.llm_problem == "LLM_BASE_URL is not configured on the server."
     s = settings(llm_provider="custom", llm_api_key="k", llm_model="m", llm_base_url="http://x/v1/")
     assert s.llm_base == "http://x/v1" and s.llm_problem is None
+
+
+def test_base_url_overrides_a_named_provider() -> None:
+    s = settings(llm_provider="openrouter", llm_base_url=" http://proxy.local/api/v1/ ")
+    assert s.llm_base == "http://proxy.local/api/v1"
+    # It never redirects the AssemblyAI gateway, which has its own setting.
+    s = settings(assemblyai_api_key="k", llm_base_url="http://proxy.local/v1")
+    assert s.llm_base == "https://llm-gateway.assemblyai.com/v1"

@@ -165,7 +165,7 @@ const STEPS: {
     icon: LanguagesIcon,
     title: "Interpret",
     body: "Each finished turn is translated into your language, keeping terms like pull request, WebSocket, or Supabase intact, and checked for a question aimed at you.",
-    tech: "AssemblyAI LLM Gateway",
+    tech: "Fast LLM · structured output",
     node: "border-translation/35 bg-translation/10 text-translation",
     artifact: <InterpretArtifact />,
   },

@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { API_URL, type ApiHealth, api } from "@/lib/api/client";
+import { API_URL, type ApiHealth, LLM_PROVIDER_LABELS, api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
 type Health =
@@ -19,8 +19,9 @@ type Health =
   | { state: "unreachable" };
 
 /**
- * Live mode only: whether the Contexa API is up and has its AssemblyAI key, checked
- * before the user presses Start so setup problems show up front.
+ * Live mode only: whether the Contexa API is up, has its AssemblyAI key, and has an LLM
+ * for translations and answers, checked before the user presses Start so setup problems
+ * show up front.
  */
 export function ApiStatus() {
   const [attempt, setAttempt] = useState(0);
@@ -58,15 +59,15 @@ export function ApiStatus() {
   if (health.state === "unreachable") {
     return (
       <Notice tone="error" icon={<UnplugIcon />} title="Can't reach the Contexa API" action={retry}>
-        Nothing answered at <code className="font-mono text-[12px]">{API_URL}</code>. Start the API
-        (in <code className="font-mono text-[12px]">apps/api</code>:{" "}
-        <code className="font-mono text-[12px]">uv run uvicorn app.main:app --port 8000</code>) and
-        check that its <code className="font-mono text-[12px]">CORS_ORIGINS</code> includes this
-        page&apos;s origin.
+        Nothing answered at <Code>{API_URL}</Code>. Start the API (in <Code>apps/api</Code>:{" "}
+        <Code>uv run uvicorn app.main:app --port 8000</Code>) and check that its{" "}
+        <Code>CORS_ORIGINS</Code> includes this page&apos;s origin.
       </Notice>
     );
   }
-  if (!health.health.assemblyaiConfigured) {
+  const { assemblyaiConfigured, llmConfigured, llmProblem, llmProvider } = health.health;
+  const { llmModel, llmAnalysisModel } = health.health;
+  if (!assemblyaiConfigured) {
     return (
       <Notice
         tone="warning"
@@ -74,19 +75,47 @@ export function ApiStatus() {
         title="The API has no AssemblyAI key"
         action={retry}
       >
-        Set <code className="font-mono text-[12px]">ASSEMBLYAI_API_KEY</code> in{" "}
-        <code className="font-mono text-[12px]">apps/api/.env</code> and restart the API.
-        Documents can still be attached; streaming and answers need the key.
+        Set <Code>ASSEMBLYAI_API_KEY</Code> in <Code>apps/api/.env</Code> and restart the API.
+        Live transcription needs it; documents can still be attached.
+        {!llmConfigured && llmProvider !== "assemblyai"
+          ? ` Translations and answers: ${llmProblem}`
+          : null}
+      </Notice>
+    );
+  }
+  if (!llmConfigured) {
+    return (
+      <Notice
+        tone="warning"
+        icon={<TriangleAlertIcon />}
+        title="Translations and answers aren't set up"
+        action={retry}
+      >
+        {llmProblem} Set <Code>LLM_PROVIDER</Code>, <Code>LLM_API_KEY</Code>, and{" "}
+        <Code>LLM_MODEL</Code> in <Code>apps/api/.env</Code> (see{" "}
+        <Code>.env.example</Code>) and restart the API. The live transcript works without them.
       </Notice>
     );
   }
   return (
     <Notice tone="success" icon={<CircleCheckIcon />}>
-      Connected to the Contexa API · AssemblyAI key set · turns on{" "}
-      <code className="font-mono text-[12px]">{health.health.llmAnalysisModel}</code>, answers on{" "}
-      <code className="font-mono text-[12px]">{health.health.llmModel}</code>
+      Connected to the Contexa API · speech on AssemblyAI ·{" "}
+      {llmAnalysisModel === llmModel ? (
+        <>
+          translations and answers on <Code>{llmModel}</Code>
+        </>
+      ) : (
+        <>
+          translations on <Code>{llmAnalysisModel}</Code>, answers on <Code>{llmModel}</Code>
+        </>
+      )}{" "}
+      via {LLM_PROVIDER_LABELS[llmProvider] ?? llmProvider}
     </Notice>
   );
+}
+
+function Code({ children }: { children: ReactNode }) {
+  return <code className="font-mono text-[12px]">{children}</code>;
 }
 
 const TONES = {

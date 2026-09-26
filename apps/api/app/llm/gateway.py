@@ -31,6 +31,8 @@ _FORMAT_ERRORS = (
     "requested parameters",
 )
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# How providers refuse `reasoning_effort` on models that don't reason.
+_REASONING_ERRORS = ("reasoning_effort", "reasoning effort", "reasoning.effort", "thinking")
 
 
 class LLMError(Exception):
@@ -50,6 +52,7 @@ class LLMGateway:
         base_url: str,
         timeout: float,
         temperature: float | None = 0.2,
+        reasoning_effort: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         provider: str = "assemblyai",
         name: str = "the AssemblyAI LLM Gateway",
@@ -57,8 +60,9 @@ class LLMGateway:
     ) -> None:
         """`base_url` is the API root that `/chat/completions` hangs off (…/v1).
 
-        `problem` is a configuration error (missing key, model, or URL) that every call
-        reports instead of calling out.
+        `reasoning_effort` ("low", …) is sent to reasoning models when set. `problem` is a
+        configuration error (missing key, model, or URL) that every call reports instead
+        of calling out.
         """
         self._api_key = api_key
         self.model = model
@@ -66,10 +70,14 @@ class LLMGateway:
         self.name = name
         self._problem = problem
         self._temperature = temperature
+        self._reasoning_effort = reasoning_effort or None
         # Per model, learned from rejections: newer Claude models refuse `temperature`,
-        # and many open models can't do strict JSON-schema output.
+        # many open models can't do strict JSON-schema output, models that don't reason
+        # refuse `reasoning_effort`, and OpenAI's newer models want max_completion_tokens.
         self._no_temperature: set[str] = set()
+        self._no_reasoning_effort: set[str] = set()
         self._json_modes: dict[str, JsonMode] = {}
+        self._max_completion_tokens: set[str] = set()
         headers = {"X-Title": "Contexa"} if provider == "openrouter" else {}
         self._client = httpx.AsyncClient(
             base_url=base_url, timeout=timeout, transport=transport, headers=headers
@@ -100,11 +108,20 @@ class LLMGateway:
             raise LLMError("LLM_MODEL is not configured on the server.")
 
         send_temperature = self._temperature is not None and model not in self._no_temperature
+        send_effort = self._reasoning_effort is not None and model not in self._no_reasoning_effort
         mode = self._json_modes.get(model, "json_schema")
-        waited = False
+        waited = grown = False
         while True:
             payload = self._payload(
-                model, system, user, schema_name, schema, max_tokens, mode, send_temperature
+                model,
+                system,
+                user,
+                schema_name,
+                schema,
+                max_tokens,
+                mode,
+                temperature=send_temperature,
+                reasoning_effort=send_effort,
             )
             response = await self._post(payload)
             if response.status_code == 429 and not waited:
@@ -117,22 +134,46 @@ class LLMGateway:
                     send_temperature = False
                     self._no_temperature.add(model)
                     continue
+                if send_effort and any(marker in detail for marker in _REASONING_ERRORS):
+                    send_effort = False
+                    self._no_reasoning_effort.add(model)
+                    continue
+                if "max_completion_tokens" in detail and "max_tokens" in payload:
+                    self._max_completion_tokens.add(model)
+                    continue
                 if mode in _FALLBACK and any(marker in detail for marker in _FORMAT_ERRORS):
                     mode = _FALLBACK[mode]
                     self._json_modes[model] = mode
                     continue
-            break
 
-        if response.status_code >= 400:
-            detail = self._error_detail(response)
-            message = f"{_capitalize(self.name)} returned HTTP {response.status_code}"
-            raise LLMError(_sentence(f"{message}: {detail}" if detail else message))
+            if response.status_code >= 400:
+                detail = self._error_detail(response)
+                message = f"{_capitalize(self.name)} returned HTTP {response.status_code}"
+                raise LLMError(_sentence(f"{message}: {detail}" if detail else message))
 
-        try:
-            content = response.json()["choices"][0]["message"]["content"]
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise LLMError(f"{_capitalize(self.name)} returned an unexpected response.") from exc
-        return parse_json_content(content)
+            try:
+                choice = response.json()["choices"][0]
+                content = choice["message"].get("content")
+                finish_reason = choice.get("finish_reason")
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+                raise LLMError(
+                    f"{_capitalize(self.name)} returned an unexpected response."
+                ) from exc
+            try:
+                return parse_json_content(content)
+            except LLMError:
+                if finish_reason != "length":
+                    raise
+                if grown:
+                    raise LLMError(
+                        "The model used up its token budget before finishing the reply. "
+                        "Reasoning models think first: pick a faster model or set "
+                        "LLM_REASONING_EFFORT=low."
+                    ) from None
+            # Cut off at max_tokens: reasoning models spend the budget on thinking before
+            # they answer. One retry gets twice the room.
+            grown = True
+            max_tokens *= 2
 
     def _payload(
         self,
@@ -143,7 +184,9 @@ class LLMGateway:
         schema: dict[str, Any],
         max_tokens: int,
         mode: JsonMode,
+        *,
         temperature: bool,
+        reasoning_effort: bool,
     ) -> dict[str, Any]:
         if mode != "json_schema":
             # Without schema-constrained decoding, the prompt carries the schema.
@@ -151,13 +194,14 @@ class LLMGateway:
                 f"{system}\n\nReply with one JSON object and nothing else. It must match "
                 f"this JSON Schema:\n{json.dumps(schema, separators=(',', ':'))}"
             )
+        new_tokens = self.provider == "openai" or model in self._max_completion_tokens
         payload: dict[str, Any] = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "max_tokens": max_tokens,
+            "max_completion_tokens" if new_tokens else "max_tokens": max_tokens,
         }
         if mode == "json_schema":
             payload["response_format"] = {
@@ -171,6 +215,10 @@ class LLMGateway:
             payload["response_format"] = {"type": "json_object"}
         if temperature:
             payload["temperature"] = self._temperature
+        # Not for OpenRouter: with require_parameters, a reasoning parameter would limit
+        # routing to reasoning models.
+        if reasoning_effort and self.provider != "openrouter":
+            payload["reasoning_effort"] = self._reasoning_effort
         return payload
 
     async def _post(self, payload: dict[str, Any]) -> httpx.Response:

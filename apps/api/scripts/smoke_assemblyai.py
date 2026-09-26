@@ -56,7 +56,7 @@ SAMPLE_KEYTERMS = ["Contexa", "AssemblyAI", "Supabase"]
 FREE_PLAN_HINT = (
     "If the streaming checks passed with this key, the key is fine: the LLM Gateway isn't "
     "part of AssemblyAI's free plan (free credits cover speech only). Add a payment method, "
-    "or switch translations and answers to another provider with LLM_PROVIDER (e.g. openrouter)."
+    "or move translations and answers to a free provider: LLM_PROVIDER=groq (see .env.example)."
 )
 MAX_LISTED_MODELS = 15
 
@@ -93,8 +93,9 @@ def llm_hint(message: str, settings: Settings) -> str:
     elif "HTTP 429" in message:
         # Before the credits check: OpenRouter's quota message also mentions credits.
         return (
-            "Rate-limited. Free tiers cap requests per minute and per day (OpenRouter ':free': "
-            "20/min, 50/day without credits). Wait, or switch model or provider."
+            "Rate-limited. Free tiers cap requests and tokens per minute and per day (Groq: about "
+            "30/min and 1,000/day per model; OpenRouter ':free': 20/min, 50/day without credits). "
+            "Wait, set LLM_REASONING_EFFORT=low, or switch model or provider."
         )
     elif "HTTP 402" in message or "credit" in lowered:
         return (
@@ -245,15 +246,13 @@ async def check_models(settings: Settings) -> None:
         print(f"       Claude models: {listed(ids, lambda m: 'claude' in m)}")
     else:
         print(f"       models: {listed(ids, lambda m: True)}")
-    missing = sorted(wanted - set(ids))
+    # OpenRouter's routers (openrouter/free, openrouter/auto) pick a model per request.
+    missing = sorted(m for m in wanted - set(ids) if not m.startswith("openrouter/"))
     if missing:
-        report(
-            "FAIL",
-            name,
-            f"{len(ids)} models listed; not found: {', '.join(missing)}",
-            "Pick ids from the list above for LLM_MODEL / LLM_FAST_MODEL "
-            "(free OpenRouter models rotate, so an old ':free' id may be gone).",
-        )
+        hint = "Pick ids from the list above for LLM_MODEL / LLM_FAST_MODEL."
+        if settings.llm_provider == "openrouter":
+            hint += " Free models come and go, so an old ':free' id may be gone."
+        report("FAIL", name, f"{len(ids)} models listed; not found: {', '.join(missing)}", hint)
     else:
         report("OK", name, f"{', '.join(sorted(wanted))} available")
 
@@ -273,6 +272,7 @@ async def check_llm(settings: Settings) -> None:
         base_url=settings.llm_base,
         timeout=settings.llm_timeout_seconds,
         temperature=settings.llm_temperature,
+        reasoning_effort=settings.llm_reasoning_effort.strip() or None,
         provider=settings.llm_provider,
         name=settings.llm_name,
     )

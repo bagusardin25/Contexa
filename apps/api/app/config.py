@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     # provider is an OpenAI-compatible API called with LLM_API_KEY and LLM_MODEL.
     llm_provider: LLMProvider = "assemblyai"
     llm_api_key: SecretStr | None = None
-    # Only for LLM_PROVIDER=custom: an OpenAI-compatible base URL, e.g. http://host/v1.
+    # An OpenAI-compatible base URL, e.g. http://host/v1. Required for LLM_PROVIDER=custom;
+    # for the named providers it replaces their default (a proxy, a regional endpoint).
     llm_base_url: str = ""
     # Override the models for any provider (required for all but assemblyai).
     llm_model: str = ""
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
 
     llm_timeout_seconds: float = Field(15.0, gt=0)
     llm_temperature: float | None = 0.2
+    # For reasoning models (gpt-oss, Gemini 2.5, o-series): "low" answers faster and spends
+    # fewer tokens of a free tier's per-minute budget. Empty = the provider's default.
+    llm_reasoning_effort: str = ""
 
     cors_origins: str = "http://localhost:3000"
     max_upload_bytes: int = 10 * 1024 * 1024
@@ -80,8 +84,9 @@ class Settings(BaseSettings):
         """Base URL of the chat completions API: `{llm_base}/chat/completions`."""
         if self.llm_provider == "assemblyai":
             return f"{self.assemblyai_llm_base_url.rstrip('/')}/v1"
-        if self.llm_provider == "custom":
-            return self.llm_base_url.strip().rstrip("/")
+        override = self.llm_base_url.strip().rstrip("/")
+        if override or self.llm_provider == "custom":
+            return override
         return LLM_BASE_URLS[self.llm_provider]
 
     @property

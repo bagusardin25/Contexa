@@ -277,7 +277,7 @@ export class PreviewTransport implements SessionTransport {
       this.emit({
         type: "translation_failed",
         turnId,
-        message: "The LLM Gateway request timed out.",
+        message: "The translation request timed out.",
       });
       return;
     }
@@ -332,7 +332,7 @@ export class PreviewTransport implements SessionTransport {
       this.emit({
         type: "suggestion_failed",
         suggestionId,
-        message: "The LLM Gateway didn't respond within 8 seconds.",
+        message: "The LLM didn't respond within 8 seconds.",
       });
       return;
     }

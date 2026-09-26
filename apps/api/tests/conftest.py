@@ -60,7 +60,7 @@ ANSWER = {
 
 
 class FakeLLM:
-    """Stands in for the LLM Gateway and answers by structured-output schema name."""
+    """Stands in for the LLM provider and answers by structured-output schema name."""
 
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []

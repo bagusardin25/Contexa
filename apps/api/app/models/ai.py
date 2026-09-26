@@ -1,7 +1,7 @@
-"""Structured contracts between the backend and the LLM Gateway (PRD §20).
+"""Structured contracts between the backend and the LLM (PRD §20).
 
-The JSON schemas are strict (every property required, no extra keys) so the gateway
-can enforce them; the Pydantic models validate what comes back.
+The JSON schemas are strict (every property required, no extra keys) so providers with
+structured outputs can enforce them; the Pydantic models validate what comes back.
 """
 
 from typing import Any

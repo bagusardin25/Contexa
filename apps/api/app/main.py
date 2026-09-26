@@ -33,6 +33,7 @@ def create_app(
             base_url=settings.llm_base,
             timeout=settings.llm_timeout_seconds,
             temperature=settings.llm_temperature,
+            reasoning_effort=settings.llm_reasoning_effort.strip() or None,
             transport=llm_transport,
             provider=settings.llm_provider,
             name=settings.llm_name,

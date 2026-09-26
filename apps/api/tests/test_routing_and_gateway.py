@@ -301,3 +301,96 @@ def test_gateway_model_override() -> None:
     _complete(gateway)
     _complete(gateway, model="claude-haiku-4-5")
     assert models == ["claude-sonnet-4-6", "claude-haiku-4-5"]
+
+
+def _reply(content: str | None, finish_reason: str = "stop") -> httpx.Response:
+    message = {"role": "assistant", "content": content}
+    return httpx.Response(
+        200, json={"choices": [{"message": message, "finish_reason": finish_reason}]}
+    )
+
+
+def test_reply_cut_off_while_reasoning_is_retried_with_more_room() -> None:
+    budgets: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        budgets.append(json.loads(request.content)["max_tokens"])
+        # The first budget goes to thinking: no content, cut off at the limit.
+        return _reply(None, "length") if len(budgets) == 1 else _reply('{"ok": 1}')
+
+    assert _complete(_gateway(handler, provider="groq", name="Groq"), max_tokens=500) == {"ok": 1}
+    assert budgets == [500, 1000]
+
+    def always_cut(_: httpx.Request) -> httpx.Response:
+        return _reply('{"translation": "Bagaimana apl', "length")
+
+    with pytest.raises(LLMError, match="used up its token budget.*LLM_REASONING_EFFORT=low"):
+        _complete(_gateway(always_cut, provider="groq", name="Groq"))
+
+
+def test_invalid_json_that_finished_normally_is_not_retried() -> None:
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return _reply("I can't help with that.")
+
+    with pytest.raises(LLMError, match="didn't return JSON"):
+        _complete(_gateway(handler))
+    assert len(calls) == 1
+
+
+def test_reasoning_effort_is_sent_and_dropped_for_models_that_refuse_it() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if body["model"] == "plain" and "reasoning_effort" in body:
+            message = "`reasoning_effort` is not supported with this model"
+            return httpx.Response(400, json={"error": {"message": message}})
+        return _reply("{}")
+
+    gateway = _gateway(
+        handler, model="openai/gpt-oss-20b", provider="groq", name="Groq", reasoning_effort="low"
+    )
+    _complete(gateway)
+    assert bodies[-1]["reasoning_effort"] == "low"
+
+    _complete(gateway, model="plain")
+    _complete(gateway, model="plain")
+    plain = [b for b in bodies if b["model"] == "plain"]
+    # Refused once, then remembered for that model only.
+    assert ["reasoning_effort" in b for b in plain] == [True, False, False]
+    _complete(gateway)
+    assert bodies[-1]["reasoning_effort"] == "low"
+
+    # Unset sends nothing, and OpenRouter never gets it (it would narrow the routing).
+    _complete(_gateway(handler, provider="groq", name="Groq"))
+    assert "reasoning_effort" not in bodies[-1]
+    _complete(_gateway(handler, provider="openrouter", name="OpenRouter", reasoning_effort="low"))
+    assert "reasoning_effort" not in bodies[-1] and "reasoning" not in bodies[-1]
+
+
+def test_max_completion_tokens_for_openai_and_models_that_ask_for_it() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "max_tokens" in body:
+            message = (
+                "Unsupported parameter: 'max_tokens' is not supported with this model. "
+                "Use 'max_completion_tokens' instead."
+            )
+            return httpx.Response(400, json={"error": {"message": message}})
+        return _reply("{}")
+
+    _complete(_gateway(handler, provider="openai", name="OpenAI", model="gpt-5-mini"))
+    assert len(bodies) == 1 and bodies[0]["max_completion_tokens"] == 800
+
+    # Behind a custom endpoint, the model's refusal teaches the gateway.
+    gateway = _gateway(handler, provider="custom", name="the LLM provider", model="gpt-5-mini")
+    _complete(gateway)
+    _complete(gateway)
+    assert ["max_tokens" in b for b in bodies[1:]] == [True, False, False]

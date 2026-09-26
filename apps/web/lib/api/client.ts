@@ -43,9 +43,27 @@ export interface ApiSession {
   keyterms: string[];
 }
 
+export type LlmProvider = "assemblyai" | "openrouter" | "groq" | "gemini" | "openai" | "custom";
+
+/** Reads after "via". */
+export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
+  assemblyai: "the AssemblyAI LLM Gateway",
+  openrouter: "OpenRouter",
+  groq: "Groq",
+  gemini: "Gemini",
+  openai: "OpenAI",
+  custom: "a custom endpoint",
+};
+
 export interface ApiHealth {
   status: "ok";
+  /** Speech-to-text always runs on AssemblyAI. */
   assemblyaiConfigured: boolean;
+  /** Who translates, detects questions, and drafts answers. */
+  llmProvider: LlmProvider;
+  llmConfigured: boolean;
+  /** Why the LLM can't run as configured, e.g. a missing LLM_MODEL. */
+  llmProblem: string | null;
   /** Grounded answers. */
   llmModel: string;
   /** Translation + question detection on every turn. */
