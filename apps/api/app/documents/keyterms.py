@@ -42,8 +42,9 @@ _FILE_EXTENSIONS = frozenset(
     "md markdown txt json yml yaml toml lock pdf docx png jpg jpeg svg css html py ts tsx".split()
 )
 _SPAN_EXCLUDED = set("/\\=(){}[]<>$;:")
-# A capitalized word right after one of these starts a sentence, a list item, or a cell.
-_SENTENCE_BREAK = set(".!?:;#*-•>|\"'(“")
+# A capitalized word right after one of these starts a sentence, a list item, a checkbox
+# ("- [ ] First run"), a link text, or a table cell.
+_SENTENCE_BREAK = set(".!?:;#*-•>|\"'(“[]")
 
 
 @dataclass
@@ -80,9 +81,10 @@ def extract_keyterms(sections: Sequence[Section], limit: int = MAX_DOCUMENT_KEYT
     writes in lower case is ordinary vocabulary and is skipped.
     """
     texts = [_FENCED_CODE.sub(" ", section.text) for section in sections]
+    # Words the prose itself uses in lower case (code spans aside): ordinary vocabulary.
     lowercase_words: set[str] = set()
     for text in texts:
-        lowercase_words.update(_LOWERCASE_WORD.findall(text))
+        lowercase_words.update(_LOWERCASE_WORD.findall(_CODE_SPAN.sub(" ", text)))
 
     candidates: dict[str, _Candidate] = {}
 
@@ -99,8 +101,11 @@ def extract_keyterms(sections: Sequence[Section], limit: int = MAX_DOCUMENT_KEYT
     for text in texts:
         for match in _CODE_SPAN.finditer(text):
             span = match.group(1).strip()
-            if len(span.split()) <= 4 and not _SPAN_EXCLUDED.intersection(span):
-                add(span, 3, offset + match.start())
+            if len(span.split()) > 4 or _SPAN_EXCLUDED.intersection(span):
+                continue
+            if span.isalpha() and span.islower() and span in lowercase_words:
+                continue  # `notes` next to "shared notes": a plain word, not jargon
+            add(span, 3, offset + match.start())
         for match in _MIXED_CASE.finditer(text):
             if match.group().lower() not in STOPWORDS:
                 add(match.group(), 2, offset + match.start())
@@ -125,9 +130,19 @@ def extract_keyterms(sections: Sequence[Section], limit: int = MAX_DOCUMENT_KEYT
                 names.setdefault(" ".join(words), []).append(occurrence)
         offset += len(text) + 2
 
+    # The title names the product ("# Notewave architecture"); a title word the body also
+    # uses, always capitalized, counts as a name even where it starts sentences.
+    title = next((section.heading for section in sections if section.heading), "")
+    heading_words = {
+        word
+        for phrase in _CAPITALIZED.findall(title)
+        for word in phrase.split()
+        if word.lower() not in STOPWORDS
+    }
     for name, occurrences in names.items():
         mid_sentence = any(not initial for _, initial in occurrences)
-        if not mid_sentence or (" " not in name and name.lower() in lowercase_words):
+        titled = name in heading_words
+        if not (mid_sentence or titled) or (" " not in name and name.lower() in lowercase_words):
             continue
         for position, _ in occurrences:
             add(name, 1.5, position)

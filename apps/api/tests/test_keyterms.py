@@ -68,6 +68,36 @@ def test_technical_terms_are_found_and_noise_is_not() -> None:
     assert not noise & set(terms)
 
 
+def test_product_names_from_the_title() -> None:
+    doc = b"""# Notewave architecture
+
+Notewave is a notes app that syncs through Supabase.
+
+## Data model
+
+Data lives in one table.
+
+## Status
+
+- [ ] First public release
+- [Product requirements](docs/PRD.md)
+"""
+    terms = extract_keyterms(parse_document(doc, "md"))
+    assert "Notewave" in terms
+    # Section headings, checkbox items, and link texts aren't names.
+    assert not {"Data", "Architecture", "First", "Product"} & set(terms)
+
+
+def test_code_spans_that_are_plain_words_are_skipped() -> None:
+    doc = (
+        b"Each note is a row in the `notes` table with a `version` column and `updated_at`.\n"
+        b"Shared notes keep a version history. Search uses `pgvector`.\n"
+    )
+    terms = extract_keyterms(parse_document(doc, "md"))
+    assert {"updated_at", "pgvector"} <= set(terms)
+    assert not {"notes", "version"} & set(terms)
+
+
 def test_extract_keyterms_respects_the_limit_and_ranks_repeats_first() -> None:
     doc = b"We run Kafka with ZooKeeper, and Kafka feeds Redis. Our Kafka cluster is big.\n"
     doc += b" ".join(f"myTerm{i}".encode() for i in range(60))
