@@ -46,7 +46,11 @@ def create_app(
         )
         app.state.llm = llm
         app.state.token_client = token_client
-        app.state.pipeline = TurnPipeline(llm)
+        app.state.pipeline = TurnPipeline(
+            llm,
+            analysis_model=settings.analysis_model,
+            answer_model=settings.assemblyai_llm_model,
+        )
         app.state.background_tasks = set()
         try:
             yield
@@ -75,6 +79,7 @@ def create_app(
             "status": "ok",
             "assemblyaiConfigured": settings.api_key is not None,
             "llmModel": settings.assemblyai_llm_model,
+            "llmAnalysisModel": settings.analysis_model,
         }
 
     return app

@@ -13,6 +13,7 @@ from .session import TurnType
 
 class TurnAnalysis(BaseModel):
     source_language: str
+    # "" when no translation was asked for; None is tolerated from lenient providers.
     translation: str | None
     technical_terms_preserved: list[str]
     type: TurnType
@@ -43,7 +44,9 @@ _STRING_LIST = {"type": "array", "items": {"type": "string"}}
 TURN_ANALYSIS_SCHEMA = _strict(
     {
         "source_language": {"type": "string", "description": "ISO 639-1 code"},
-        "translation": {"type": ["string", "null"]},
+        # A plain string rather than a string/null union: union types aren't accepted by
+        # every model's strict structured-output mode.
+        "translation": {"type": "string"},
         "technical_terms_preserved": _STRING_LIST,
         "type": {"type": "string", "enum": ["statement", "question", "action_request", "other"]},
         "requires_answer": {"type": "boolean"},

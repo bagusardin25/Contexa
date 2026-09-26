@@ -55,6 +55,7 @@ def test_health(client: TestClient) -> None:
         "status": "ok",
         "assemblyaiConfigured": True,
         "llmModel": "claude-sonnet-4-6",
+        "llmAnalysisModel": "claude-haiku-4-5",
     }
 
 
@@ -280,13 +281,38 @@ def test_answer_endpoint(client: TestClient) -> None:
 def test_translation_skipped_when_already_in_display_language(
     client: TestClient, fake_llm: FakeLLM
 ) -> None:
-    fake_llm.responses["turn_analysis"] = {**STATEMENT_ANALYSIS, "translation": None}
+    fake_llm.responses["turn_analysis"] = {**STATEMENT_ANALYSIS, "translation": ""}
     session_id = create_session(client, displayLanguage="en")
     with client.websocket_connect(f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}) as ws:
         ws.send_json(turn("t1", "Welcome back."))
         assert ws.receive_json()["type"] == "turn_classified"
     system_prompt = fake_llm.calls("turn_analysis")[0]["messages"][0]["content"]
-    assert "translation: null" in system_prompt
+    assert 'translation: ""' in system_prompt
+
+
+def test_analysis_and_answers_use_their_own_models(client: TestClient, fake_llm: FakeLLM) -> None:
+    session_id = create_session(client)
+    with client.websocket_connect(f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}) as ws:
+        ws.send_json(turn("t1", "How do you handle concurrent updates?"))
+        receive_until(ws, "suggestion_ready")
+
+    assert fake_llm.calls("turn_analysis")[0]["model"] == "claude-haiku-4-5"
+    assert fake_llm.calls("turn_analysis")[0]["max_tokens"] == 1200
+    assert fake_llm.calls("grounded_answer")[0]["model"] == "claude-sonnet-4-6"
+
+
+def test_empty_fast_model_falls_back_to_the_main_model(
+    fake_llm: FakeLLM, fake_tokens: FakeTokens
+) -> None:
+    with build_client(fake_llm, fake_tokens, assemblyai_llm_fast_model="") as client:
+        assert client.get("/health").json()["llmAnalysisModel"] == "claude-sonnet-4-6"
+        session_id = create_session(client)
+        with client.websocket_connect(
+            f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}
+        ) as ws:
+            ws.send_json(turn("t1", "How do you handle concurrent updates?"))
+            receive_until(ws, "suggestion_ready")
+    assert fake_llm.calls("turn_analysis")[0]["model"] == "claude-sonnet-4-6"
 
 
 def test_hallucinated_citations_are_dropped(client: TestClient, fake_llm: FakeLLM) -> None:

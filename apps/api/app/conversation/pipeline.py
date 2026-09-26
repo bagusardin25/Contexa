@@ -45,6 +45,10 @@ Emit = Callable[[ServerEvent], Awaitable[None]]
 RECENT_TURNS_FOR_ANALYSIS = 3
 RECENT_TURNS_FOR_ANSWER = 6
 MAX_EVIDENCE = 3
+# Room for the translation of a long webinar monologue plus the other fields; a truncated
+# response is invalid JSON and would fail the whole analysis.
+ANALYSIS_MAX_TOKENS = 1200
+ANSWER_MAX_TOKENS = 900
 
 
 async def _discard(_: ServerEvent) -> None:
@@ -77,8 +81,12 @@ def _context_lines(turns: list[TurnOut]) -> list[ContextLine]:
 
 
 class TurnPipeline:
-    def __init__(self, llm: LLMGateway) -> None:
+    def __init__(self, llm: LLMGateway, *, analysis_model: str, answer_model: str) -> None:
         self._llm = llm
+        # Analysis runs on every finished turn, so it uses the faster model (latency budget:
+        # translation < 2 s). Grounded answers use the stronger one.
+        self._analysis_model = analysis_model
+        self._answer_model = answer_model
 
     async def handle_final_turn(self, session: SessionState, turn_in: TurnIn, emit: Emit) -> None:
         turn = session.add_turn(turn_in)
@@ -119,7 +127,8 @@ class TurnPipeline:
                 user=user,
                 schema_name="turn_analysis",
                 schema=TURN_ANALYSIS_SCHEMA,
-                max_tokens=700,
+                max_tokens=ANALYSIS_MAX_TOKENS,
+                model=self._analysis_model,
             )
             analysis = TurnAnalysis.model_validate(data)
         except (LLMError, ValidationError) as exc:
@@ -228,7 +237,8 @@ class TurnPipeline:
                 user=user,
                 schema_name="grounded_answer",
                 schema=ANSWER_SCHEMA,
-                max_tokens=900,
+                max_tokens=ANSWER_MAX_TOKENS,
+                model=self._answer_model,
             )
             draft = AnswerDraft.model_validate(data)
         except (LLMError, ValidationError) as exc:

@@ -10,8 +10,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     assemblyai_api_key: SecretStr | None = None
-    # One place to change the reasoning model (implementation guide §18).
+    # One place to change the reasoning models (implementation guide §18). Grounded answers
+    # use the main model; the per-turn analysis (translation + question detection) runs on
+    # every finished turn, so it gets a faster model. Leave the fast model empty to use the
+    # main model for both.
     assemblyai_llm_model: str = "claude-sonnet-4-6"
+    assemblyai_llm_fast_model: str = "claude-haiku-4-5"
     assemblyai_llm_base_url: str = "https://llm-gateway.assemblyai.com"
     assemblyai_streaming_base_url: str = "https://streaming.assemblyai.com"
     assemblyai_streaming_ws_url: str = "wss://streaming.assemblyai.com/v3/ws"
@@ -33,6 +37,10 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def analysis_model(self) -> str:
+        return self.assemblyai_llm_fast_model.strip() or self.assemblyai_llm_model
 
     @property
     def api_key(self) -> str | None:

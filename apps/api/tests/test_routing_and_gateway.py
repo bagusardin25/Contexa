@@ -108,3 +108,68 @@ def test_gateway_errors_become_llm_errors() -> None:
                 system="s", user="u", schema_name="x", schema={}
             )
         )
+
+
+def _complete(gateway: LLMGateway, **kwargs) -> dict:
+    return asyncio.run(
+        gateway.complete_json(system="s", user="u", schema_name="x", schema={}, **kwargs)
+    )
+
+
+def test_gateway_errors_carry_the_gateway_message_without_the_key() -> None:
+    def forbidden(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"error": {"message": "LLM Gateway isn't available on the free plan (key-123)"}},
+        )
+
+    with pytest.raises(LLMError) as exc:
+        _complete(_gateway(forbidden))
+    message = str(exc.value)
+    assert message.startswith("The LLM Gateway returned HTTP 403: LLM Gateway isn't available")
+    assert "key-123" not in message and "[redacted]" in message
+    assert message.endswith(".")
+
+
+def test_gateway_retries_without_temperature_when_the_model_rejects_it() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "temperature" in body:
+            return httpx.Response(
+                400, json={"error": {"message": "temperature is deprecated for this model"}}
+            )
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": 1}'}}]})
+
+    gateway = _gateway(handler)
+    assert _complete(gateway) == {"ok": 1}
+    assert _complete(gateway) == {"ok": 1}
+    # One rejected attempt, then the model is remembered and temperature is never sent again.
+    assert ["temperature" in body for body in bodies] == [True, False, False]
+
+
+def test_gateway_does_not_retry_other_bad_requests() -> None:
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(400, json={"error": "response_format is not supported"})
+
+    with pytest.raises(LLMError, match="response_format is not supported"):
+        _complete(_gateway(handler))
+    assert len(calls) == 1
+
+
+def test_gateway_model_override() -> None:
+    models = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        models.append(json.loads(request.content)["model"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    gateway = _gateway(handler)
+    _complete(gateway)
+    _complete(gateway, model="claude-haiku-4-5")
+    assert models == ["claude-sonnet-4-6", "claude-haiku-4-5"]

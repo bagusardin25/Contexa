@@ -77,7 +77,7 @@ def turn_analysis_prompt(
    never answer the speaker, never summarize. Keep it about as long as the original so it
    can be read live. If the turn is already in {target}, return it unchanged."""
         if translate
-        else "translation: null (no translation is needed for this session)."
+        else 'translation: "" (an empty string; no translation is needed for this session).'
     )
     system = f"""You are the live interpreter inside Contexa, a copilot that helps a participant
 follow and join a conversation held in another language. You receive one FINAL speech turn
