@@ -82,6 +82,12 @@ async function addLink(page, url) {
 
 const documentItem = (page, name) => page.locator('ul[aria-label="Attached documents"] li').filter({ hasText: name });
 
+class Skipped extends Error {}
+/** Ends a scenario that needs something this machine doesn't have (say, a database). */
+function skip(reason) {
+  throw new Skipped(reason);
+}
+
 async function scenario(name, fn) {
   if (only.length && !only.some((key) => name.includes(key))) return;
   const started = Date.now();
@@ -90,6 +96,11 @@ async function scenario(name, fn) {
     results.push({ name, ok: true, notes });
     console.log(`PASS ${name} (${((Date.now() - started) / 1000).toFixed(1)} s)${notes ? ` · ${notes}` : ""}`);
   } catch (error) {
+    if (error instanceof Skipped) {
+      results.push({ name, ok: true, skipped: true, notes: error.message });
+      console.log(`SKIP ${name}: ${error.message}`);
+      return;
+    }
     results.push({ name, ok: false, notes: error.message });
     console.log(`FAIL ${name}: ${error.message.split("\n")[0]}`);
   }
@@ -891,8 +902,106 @@ async function scenario(name, fn) {
     }
   });
 
+  await scenario("27 history: a finished session is saved with its recap, found by meaning, opened at the turn, exported, and deleted", async () => {
+    if (!process.env.E2E_DATABASE_URL) skip("set E2E_DATABASE_URL to a Postgres with pgvector");
+    await control("/__control/reset");
+    servers("start", "api", { HISTORY: "on", EMBEDDINGS: "on" });
+    const contexts = [];
+    try {
+      const { context, page, problems } = await openSession(browser);
+      contexts.push(context);
+      await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+      const title = `Demo day ${Date.now().toString(36)}`;
+      await page.getByLabel("Session name").fill(title);
+      const saveSwitch = page.getByRole("switch", { name: "Save to history" });
+      await saveSwitch.waitFor();
+      assert((await saveSwitch.getAttribute("aria-checked")) === "true", "Save to history should be on by default");
+      await page.getByRole("button", { name: "Load sample project docs" }).click();
+      await page.getByText(/Ready · \d+ chunks?/).nth(1).waitFor({ timeout: 15000 });
+      await chooseMicAndStart(page);
+      await status(page, "Live").waitFor({ timeout: 20000 });
+      await page.getByText("We use optimistic locking with a version column.").waitFor({ timeout: 20000 });
+      await page.getByRole("button", { name: "Stop session" }).click();
+      await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
+      // Saved on its own once the recap is written.
+      const notice = page.getByRole("status", { name: "History" });
+      await notice.getByText("Saved to history").waitFor({ timeout: 15000 });
+      await notice.getByRole("link", { name: "Open" }).click();
+      await page.waitForURL(/\/history\?id=/);
+      await page.getByRole("heading", { name: title }).waitFor({ timeout: 10000 });
+      const recap = await page.getByRole("region", { name: "Recap" }).innerText();
+      assert(recap.includes("Tim membahas cara Notewave"), `recap: ${recap}`);
+      const saved = await transcript(page).innerText();
+      assert(saved.includes(QUESTION) && saved.includes("Selamat datang kembali"), `transcript: ${saved.slice(0, 200)}`);
+      assert(saved.includes("We use optimistic locking with a version column.") && saved.includes("notewave-architecture.md · Conflict handling"), `answer: ${saved}`);
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        page.getByRole("button", { name: "Export .md" }).click(),
+      ]);
+      const exported = fs.readFileSync(await download.path(), "utf8");
+      assert(exported.includes(`# ${title}`) && exported.includes("## Recap") && exported.includes("Evidence: notewave-architecture.md · Conflict handling"), exported.slice(0, 400));
+      // The list, then a search in other words and another language.
+      await page.getByRole("link", { name: "All sessions" }).click();
+      await page.getByRole("list", { name: "Saved sessions" }).getByText(title).waitFor({ timeout: 10000 });
+      await page.getByRole("searchbox", { name: "Search every session, by meaning" }).fill("konflik saat edit bersamaan");
+      await page.getByRole("button", { name: "Search", exact: true }).click();
+      const results = page.getByRole("region", { name: "Search results" });
+      await results.getByText("By meaning and words").waitFor({ timeout: 10000 });
+      const hit = results.getByRole("link").filter({ hasText: title }).filter({ hasText: "Transcript" }).filter({ hasText: QUESTION }).first();
+      await hit.click();
+      await page.waitForURL(/[?&]turn=/);
+      const turnId = new URL(page.url()).searchParams.get("turn");
+      const turn = page.locator(`[id="turn-${turnId}"]`);
+      await turn.waitFor({ timeout: 10000 });
+      assert((await turn.innerText()).includes(QUESTION), `opened turn: ${await turn.innerText()}`);
+      const inView = await turn.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        return box.top >= 0 && box.bottom <= window.innerHeight;
+      });
+      assert(inView, "the turn should be scrolled into view");
+      // Another browser has another device key, so it can't see this session.
+      const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      contexts.push(other);
+      const otherPage = await other.newPage();
+      await otherPage.goto("http://localhost:3000/history");
+      await otherPage.getByText("No saved sessions yet").waitFor({ timeout: 10000 });
+      // Delete, with a confirmation.
+      await page.getByRole("button", { name: "Delete", exact: true }).click();
+      await page.getByRole("button", { name: "Delete session" }).click();
+      await page.waitForURL((url) => url.pathname === "/history" && !url.search);
+      await page.getByText("No saved sessions yet").waitFor({ timeout: 10000 });
+      assert(problems.length === 0, problems.join("; "));
+      return `saved, found by meaning (turn ${turnId}), exported ${exported.length} chars, deleted`;
+    } finally {
+      for (const context of contexts) await context.close();
+      servers("start", "api");
+    }
+  });
+
+  await scenario("28 history off: no save switch, and the history page says what to configure", async () => {
+    servers("start", "api", { HISTORY: "off" });
+    try {
+      const { context, page, problems } = await openSession(browser);
+      await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+      const switches = await page.getByRole("switch", { name: "Save to history" }).count();
+      assert(switches === 0, "no Save to history switch without a database");
+      await page.goto("http://localhost:3000/history");
+      await page.getByText("History isn't set up on this server").waitFor({ timeout: 10000 });
+      const text = await page.getByRole("status").filter({ hasText: "History isn't set up" }).innerText();
+      assert(text.includes("DATABASE_URL"), text);
+      // The browser logs the 503 itself; only script errors count.
+      const unexpected = problems.filter((p) => !/status of 503/.test(p));
+      assert(unexpected.length === 0, unexpected.join("; "));
+      await context.close();
+    } finally {
+      servers("start", "api");
+    }
+  });
+
   await browser.close();
+  const skipped = results.filter((r) => r.skipped).length;
   const failed = results.filter((r) => !r.ok);
-  console.log(`\n${results.length - failed.length}/${results.length} passed`);
+  const ran = results.length - skipped;
+  console.log(`\n${ran - failed.length}/${ran} passed${skipped ? `, ${skipped} skipped` : ""}`);
   process.exit(failed.length ? 1 : 0);
 })();

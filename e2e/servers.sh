@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start/stop the local test stack: fake AssemblyAI (8100), API (8000), web (3000).
 # usage: [LLM_MODE=assemblyai|openrouter|groq] [EMBEDDINGS=on] [IMPORTS=public]
-#        servers.sh start|stop fake|api|api-nokey|api-nollm|web
+#        [HISTORY=on E2E_DATABASE_URL=postgresql://...] servers.sh start|stop fake|api|api-nokey|api-nollm|web
 #   LLM_MODE picks who answers the API's LLM calls (both are the fake server):
 #   assemblyai = AssemblyAI LLM Gateway shape (default); openrouter, groq = OpenAI-compatible.
 set -u
@@ -76,6 +76,10 @@ start() {
       EMBEDDING_MODEL=fake-embed)
   else
     env+=(EMBEDDING_PROVIDER=none)
+  fi
+  # HISTORY=on: meeting history in the Postgres (with pgvector) at E2E_DATABASE_URL.
+  if [ "${HISTORY:-off}" = on ]; then
+    env+=(DATABASE_URL="${E2E_DATABASE_URL:?HISTORY=on needs E2E_DATABASE_URL}")
   fi
   # The fake web page lives on 127.0.0.1; IMPORTS=public keeps the production guard on.
   [ "${IMPORTS:-local}" = public ] || env+=(IMPORT_ALLOW_PRIVATE_HOSTS=true)

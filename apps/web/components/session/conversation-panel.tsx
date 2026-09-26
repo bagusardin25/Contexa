@@ -1,10 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import {
   ArrowDownIcon,
+  ArrowRightIcon,
   CaptionsIcon,
   CircleCheckIcon,
   DownloadIcon,
+  HistoryIcon,
   LoaderCircleIcon,
   PlusIcon,
   RotateCwIcon,
@@ -23,6 +26,7 @@ import type { AudioSource, SessionStatus } from "@/types/session";
 
 import { AudioBars, PanelHeader } from "./primitives";
 import { useIsPreview, useSession, useSessionStoreApi } from "./session-store-provider";
+import { RecapView } from "./recap-view";
 import { PartialTurnItem, TurnItem } from "./turn-item";
 
 export function ConversationPanel({
@@ -227,6 +231,7 @@ function SessionSummary() {
         ))}
       </dl>
       {turns.length > 0 ? <RecapCard /> : null}
+      {turns.length > 0 ? <HistoryNotice /> : null}
       <div className="mt-5 flex flex-wrap gap-2">
         {turns.length > 0 ? <ExportButton /> : null}
         <Button size="sm" onClick={newSession}>
@@ -277,11 +282,8 @@ function RecapCard() {
           </Button>
         </div>
       ) : recap.status === "ready" ? (
-        <div lang={recap.language} className="mt-3 space-y-4 text-sm">
-          <p className="leading-relaxed">{recap.recap.summary}</p>
-          <RecapList title="Key points" items={recap.recap.keyPoints} />
-          <RecapList title="Action items" items={recap.recap.actionItems} />
-          <RecapList title="Open questions" items={recap.recap.openQuestions} />
+        <div className="mt-3">
+          <RecapView recap={recap.recap} language={recap.language} />
         </div>
       ) : (
         <Button size="xs" variant="outline" className="mt-3" onClick={() => void generateRecap()}>
@@ -293,18 +295,48 @@ function RecapCard() {
   );
 }
 
-function RecapList({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null;
+/** Where the finished session went: saving, saved (with a link), or why it wasn't. */
+function HistoryNotice() {
+  const history = useSession((state) => state.history);
+  const available = useSession((state) => state.historyAvailable);
+  const enabled = useSession((state) => state.config.saveHistory);
+  const saveToHistory = useSession((state) => state.saveToHistory);
+
+  if (!available || !enabled || history.status === "idle") return null;
   return (
-    <div>
-      <p className="mb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        {title}
-      </p>
-      <ul className="list-disc space-y-1 pl-5 leading-relaxed marker:text-muted-foreground">
-        {items.map((item, index) => (
-          <li key={index}>{item}</li>
-        ))}
-      </ul>
+    <div
+      role={history.status === "failed" ? "alert" : "status"}
+      aria-label="History"
+      className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground"
+    >
+      {history.status === "saving" ? (
+        <>
+          <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden />
+          Saving to history…
+        </>
+      ) : history.status === "saved" ? (
+        <>
+          <HistoryIcon className="size-3.5 text-success" aria-hidden />
+          Saved to history
+          <span aria-hidden>·</span>
+          <Link
+            href={`/history?id=${encodeURIComponent(history.meetingId)}`}
+            className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+          >
+            Open
+            <ArrowRightIcon className="size-3" aria-hidden />
+          </Link>
+        </>
+      ) : (
+        <>
+          <TriangleAlertIcon className="size-3.5 text-destructive" aria-hidden />
+          <span className="min-w-0 flex-1">Couldn&apos;t save to history. {history.message}</span>
+          <Button size="xs" variant="outline" onClick={() => void saveToHistory()}>
+            <RotateCwIcon />
+            Retry
+          </Button>
+        </>
+      )}
     </div>
   );
 }

@@ -113,6 +113,7 @@ def build_client(
     embeddings: "FakeEmbeddings | None" = None,
     web: "Callable[[httpx.Request], httpx.Response] | None" = None,
     resolver: "Callable[[str, int], Awaitable[list[str]]] | None" = None,
+    supabase: "Callable[[httpx.Request], httpx.Response] | None" = None,
     **overrides: Any,
 ) -> TestClient:
     if embeddings is not None:
@@ -136,6 +137,7 @@ def build_client(
         embedding_transport=httpx.MockTransport(embeddings.handler) if embeddings else None,
         import_transport=httpx.MockTransport(web) if web else None,
         import_resolver=resolver,
+        auth_transport=httpx.MockTransport(supabase) if supabase else None,
     )
     return TestClient(app)
 

@@ -15,6 +15,8 @@ import { API_URL, type ApiHealth, LLM_PROVIDER_LABELS, api } from "@/lib/api/cli
 import { openPreview } from "@/lib/session/mode";
 import { cn } from "@/lib/utils";
 
+import { useSession } from "./session-store-provider";
+
 type Health =
   | { state: "checking"; slow: boolean }
   | { state: "ready"; health: ApiHealth }
@@ -33,6 +35,7 @@ const RETRY_FOR_MS = 120_000;
  * show up front.
  */
 export function ApiStatus() {
+  const setHistoryAvailable = useSession((state) => state.setHistoryAvailable);
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ attempt: number; health: Health } | null>(null);
 
@@ -57,6 +60,8 @@ export function ApiStatus() {
           if (!active) return;
           window.clearTimeout(slowTimer);
           setResult({ attempt, health });
+          // The setup screen offers "Save to history" only when the API has a database.
+          setHistoryAvailable(health.state === "ready" && health.health.historyEnabled === true);
         });
     };
     check();
@@ -66,7 +71,7 @@ export function ApiStatus() {
       window.clearTimeout(slowTimer);
       window.clearTimeout(retryTimer);
     };
-  }, [attempt]);
+  }, [attempt, setHistoryAvailable]);
 
   const health: Health =
     result?.attempt === attempt ? result.health : { state: "checking", slow: false };

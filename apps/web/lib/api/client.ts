@@ -72,6 +72,8 @@ export interface ApiHealth {
   llmAnalysisModel: string;
   /** Semantic search over documents, fused with keyword search; null = keywords only. */
   embeddingModel?: string | null;
+  /** Finished sessions can be saved to the API's database (meeting history). */
+  historyEnabled?: boolean;
 }
 
 export interface StreamToken {
@@ -110,7 +112,7 @@ export function errorDetail(body: unknown): string | null {
   return null;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${baseUrl()}${path}`, init);

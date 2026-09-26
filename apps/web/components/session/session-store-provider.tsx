@@ -22,9 +22,9 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 /** The mode is fixed for the provider's lifetime; key the provider by it to switch. */
 export function SessionStoreProvider({ mode, children }: { mode: SessionMode; children: ReactNode }) {
   const [value] = useState<SessionContextValue>(() => {
-    const { transport, uploader } = createSessionServices(mode);
+    const { transport, uploader, history } = createSessionServices(mode);
     return {
-      store: createSessionStore({ transport, uploader }),
+      store: createSessionStore({ transport, uploader, history }),
       transportKind: transport.kind,
     };
   });

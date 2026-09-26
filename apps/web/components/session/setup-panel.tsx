@@ -62,9 +62,11 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
   const start = useSession((state) => state.start);
   const stop = useSession((state) => state.stop);
   const audioFile = useSession((state) => state.audioFile);
+  const historyAvailable = useSession((state) => state.historyAvailable);
   const isPreview = useIsPreview();
   const titleId = useId();
   const speakerLabelsId = useId();
+  const saveHistoryId = useId();
 
   const starting =
     status === "requesting_permission" || status === "connecting" || status === "stopping";
@@ -257,6 +259,22 @@ export function SetupPanel({ onOpenContext }: { onOpenContext: () => void }) {
                 onCheckedChange={(checked) => updateConfig({ speakerLabels: checked })}
               />
             </div>
+            {historyAvailable ? (
+              <div className="flex items-center justify-between gap-4 rounded-xl border px-4 py-3">
+                <div className="space-y-1">
+                  <Label htmlFor={saveHistoryId}>Save to history</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Keeps the transcript, answers, and recap when the session ends, searchable by
+                    meaning. Never the audio.
+                  </p>
+                </div>
+                <Switch
+                  id={saveHistoryId}
+                  checked={config.saveHistory}
+                  onCheckedChange={(checked) => updateConfig({ saveHistory: checked })}
+                />
+              </div>
+            ) : null}
           </section>
 
           <ContextSummary onOpenContext={onOpenContext} />

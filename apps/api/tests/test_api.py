@@ -61,6 +61,7 @@ def test_health(client: TestClient) -> None:
         "llmModel": "claude-sonnet-4-6",
         "llmAnalysisModel": "claude-haiku-4-5",
         "embeddingModel": None,
+        "historyEnabled": False,
     }
 
 

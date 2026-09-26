@@ -32,6 +32,9 @@ export function SiteHeader() {
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-2">
+          <Button asChild size="sm" variant="ghost" className="hidden sm:inline-flex">
+            <Link href="/history">History</Link>
+          </Button>
           <ThemeToggle />
           <UserMenu />
           <Button asChild size="sm">

@@ -50,6 +50,7 @@ create table if not exists contexa.passages (
   embedding vector,
   primary key (meeting_id, position)
 );
+alter table contexa.passages add column if not exists ref text;
 create index if not exists passages_owner on contexa.passages (owner, embedding_model);
 
 alter table contexa.meetings enable row level security;
@@ -63,6 +64,8 @@ class Passage:
     text: str
     speaker: str | None = None
     at_ms: int | None = None
+    # The turn it belongs to (turns and answers), so a search hit can open it.
+    ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,12 +86,14 @@ class MeetingRow:
 @dataclass(frozen=True)
 class SearchRow:
     meeting_id: str
+    position: int
     title: str
     started_at: datetime | None
     kind: str
     speaker: str | None
     text: str
     at_ms: int | None
+    ref: str | None
     score: float
 
 
@@ -98,6 +103,17 @@ class MeetingConflict(Exception):
 
 def vector_literal(vector: Vector) -> str:
     return "[" + ",".join(f"{value:.6g}" for value in vector) + "]"
+
+
+def embedding_key(model: str, dimensions: int) -> str:
+    """Vectors are only comparable within one model and size: pgvector refuses to compare
+    vectors of different lengths, and EMBEDDING_DIMENSIONS can change between saves."""
+    return f"{model}@{dimensions}"
+
+
+def _like_pattern(query: str) -> str:
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _row(record: asyncpg.Record) -> MeetingRow:
@@ -112,7 +128,7 @@ def _row(record: asyncpg.Record) -> MeetingRow:
         turn_count=record["turn_count"],
         question_count=record["question_count"],
         summary=record["summary"],
-        data=json.loads(data) if isinstance(data, str) else data,
+        data=(json.loads(data) if isinstance(data, str) else data) if data is not None else {},
         updated_at=record["updated_at"],
     )
 
@@ -126,7 +142,12 @@ class Database:
         # statement_cache_size=0: Supabase's transaction pooler (port 6543) can't keep
         # prepared statements between transactions.
         self._pool = await asyncpg.create_pool(
-            self._dsn, min_size=0, max_size=5, statement_cache_size=0, command_timeout=15
+            self._dsn,
+            min_size=0,
+            max_size=5,
+            statement_cache_size=0,
+            command_timeout=15,
+            timeout=10,
         )
         async with self._pool.acquire() as connection:
             await connection.execute("create extension if not exists vector")
@@ -154,7 +175,12 @@ class Database:
         vectors: Sequence[Vector] | None,
         embedding_model: str | None,
     ) -> None:
-        """Creates or replaces a meeting and its searchable passages, in one transaction."""
+        """Creates or replaces a meeting and its searchable passages, in one transaction.
+
+        `embedding_model` is the model name; vectors are stored under its `embedding_key`."""
+        key = (
+            embedding_key(embedding_model, len(vectors[0])) if vectors and embedding_model else None
+        )
         async with self.pool.acquire() as connection, connection.transaction():
             current = await connection.fetchval(
                 "select owner from contexa.meetings where id = $1 for update", meeting_id
@@ -197,8 +223,9 @@ class Database:
                     passage.speaker,
                     passage.text,
                     passage.at_ms,
-                    embedding_model if vectors else None,
-                    vector_literal(vectors[position]) if vectors else None,
+                    passage.ref,
+                    key,
+                    vector_literal(vectors[position]) if key and vectors else None,
                 )
                 for position, passage in enumerate(passages)
             ]
@@ -206,16 +233,19 @@ class Database:
                 await connection.executemany(
                     """
                     insert into contexa.passages (meeting_id, position, owner, kind, speaker,
-                      text, at_ms, embedding_model, embedding)
-                    values ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector)
+                      text, at_ms, ref, embedding_model, embedding)
+                    values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector)
                     """,
                     rows,
                 )
 
     async def list_meetings(self, owner: str, limit: int = 100) -> list[MeetingRow]:
+        # Everything but `data`: the list doesn't need whole transcripts.
         records = await self.pool.fetch(
             """
-            select * from contexa.meetings where owner = $1
+            select id, title, started_at, ended_at, speaker_language, display_language,
+                   turn_count, question_count, summary, null::jsonb as data, updated_at
+            from contexa.meetings where owner = $1
             order by coalesce(started_at, created_at) desc limit $2
             """,
             owner,
@@ -240,15 +270,15 @@ class Database:
     ) -> list[SearchRow]:
         records = await self.pool.fetch(
             """
-            select p.meeting_id, m.title, m.started_at, p.kind, p.speaker, p.text, p.at_ms,
-                   1 - (p.embedding <=> $3::vector) as score
+            select p.meeting_id, p.position, m.title, m.started_at, p.kind, p.speaker, p.text,
+                   p.at_ms, p.ref, 1 - (p.embedding <=> $3::vector) as score
             from contexa.passages p join contexa.meetings m on m.id = p.meeting_id
             where p.owner = $1 and p.embedding_model = $2 and p.embedding is not null
             order by p.embedding <=> $3::vector
             limit $4
             """,
             owner,
-            embedding_model,
+            embedding_key(embedding_model, len(vector)),
             vector_literal(vector),
             limit,
         )
@@ -259,20 +289,22 @@ class Database:
         records = await self.pool.fetch(
             """
             with q as (select plainto_tsquery('simple', $2) as query)
-            select p.meeting_id, m.title, m.started_at, p.kind, p.speaker, p.text, p.at_ms,
+            select p.meeting_id, p.position, m.title, m.started_at, p.kind, p.speaker, p.text,
+                   p.at_ms, p.ref,
                    greatest(
                      ts_rank(to_tsvector('simple', p.text), q.query),
-                     case when p.text ilike '%' || $2 || '%' then 0.5 else 0 end
+                     case when p.text ilike $4 then 0.5 else 0 end
                    ) as score
             from contexa.passages p join contexa.meetings m on m.id = p.meeting_id, q
             where p.owner = $1
-              and (to_tsvector('simple', p.text) @@ q.query or p.text ilike '%' || $2 || '%')
+              and (to_tsvector('simple', p.text) @@ q.query or p.text ilike $4)
             order by score desc, m.started_at desc nulls last
             limit $3
             """,
             owner,
             query,
             limit,
+            _like_pattern(query),
         )
         return [_search_row(record) for record in records]
 
@@ -280,11 +312,13 @@ class Database:
 def _search_row(record: asyncpg.Record) -> SearchRow:
     return SearchRow(
         meeting_id=record["meeting_id"],
+        position=record["position"],
         title=record["title"],
         started_at=record["started_at"],
         kind=record["kind"],
         speaker=record["speaker"],
         text=record["text"],
         at_ms=record["at_ms"],
+        ref=record["ref"],
         score=float(record["score"]),
     )

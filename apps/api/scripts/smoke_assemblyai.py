@@ -14,7 +14,8 @@ The WAV file must be 16 kHz, mono, 16-bit PCM. Convert anything else with:
 
 It uses the server's own settings, prompts, schemas, and streaming URLs, spends a few
 cents at most (a few seconds of streaming per model and two short LLM calls; on a free
-tier, two requests of the daily quota), and never prints API keys.
+tier, two requests of the daily quota), and never prints API keys. With DATABASE_URL set it
+also connects to the history database, which creates the `contexa` schema like the API does.
 """
 
 import argparse
@@ -25,6 +26,7 @@ import time
 import wave
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ValidationError
@@ -40,6 +42,7 @@ from app.llm.gateway import LLMError, LLMGateway
 from app.llm.prompts import Excerpt, answer_prompt, turn_analysis_prompt
 from app.models.ai import ANSWER_SCHEMA, TURN_ANALYSIS_SCHEMA, AnswerDraft, TurnAnalysis
 from app.models.session import SessionConfig, SpeakerLanguage
+from app.store.database import Database
 
 FRAME_MS = 50
 FRAME_BYTES = SAMPLE_RATE * 2 * FRAME_MS // 1000  # PCM16 mono
@@ -387,6 +390,64 @@ async def check_embeddings(settings: Settings) -> None:
         await client.aclose()
 
 
+async def check_history(settings: Settings) -> None:
+    name = "History database"
+    dsn = settings.database_url.get_secret_value().strip() if settings.database_url else ""
+    if not dsn:
+        report("SKIP", name, "DATABASE_URL is empty, so finished sessions aren't saved")
+        return
+    password = urlsplit(dsn).password or ""
+    database = Database(dsn)
+    try:
+        started = time.perf_counter()
+        await database.connect()
+        async with database.pool.acquire() as connection:
+            version = await connection.fetchval(
+                "select extversion from pg_extension where extname = 'vector'"
+            )
+            count = await connection.fetchval("select count(*) from contexa.meetings")
+        elapsed = round((time.perf_counter() - started) * 1000)
+        report("OK", name, f"{elapsed} ms · pgvector {version} · {count} saved sessions")
+    except Exception as exc:  # noqa: BLE001 - any failure is reported with its reason
+        detail = redact(f"{type(exc).__name__}: {exc}", settings)
+        if password:
+            detail = detail.replace(password, "[redacted]")
+        report(
+            "FAIL",
+            name,
+            detail,
+            "On Supabase use Connect → Session pooler (port 5432; the direct host is IPv6-only) "
+            "and URL-encode special characters in the password.",
+        )
+    finally:
+        await database.close()
+
+
+async def check_supabase(settings: Settings) -> None:
+    name = "Supabase sign-in check"
+    anon = settings.supabase_anon_key
+    key = anon.get_secret_value().strip() if anon else ""
+    if not settings.supabase_url.strip() or not key:
+        report("SKIP", name, "SUPABASE_URL / SUPABASE_ANON_KEY empty: history is per browser")
+        return
+    url = f"{settings.supabase_url.strip().rstrip('/')}/auth/v1/settings"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, headers={"apikey": key})
+    except httpx.HTTPError as exc:
+        report("FAIL", name, f"couldn't reach {url} ({type(exc).__name__})", "Check SUPABASE_URL.")
+        return
+    if response.status_code == 200:
+        report("OK", name, "the project URL and key are accepted")
+    else:
+        report(
+            "FAIL",
+            name,
+            f"HTTP {response.status_code} from {url}",
+            "Use the project URL and the publishable (anon) key from Project Settings → API Keys.",
+        )
+
+
 def load_wav(path: Path) -> bytes:
     with wave.open(str(path), "rb") as wav:
         if (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) != (SAMPLE_RATE, 1, 2):
@@ -422,6 +483,8 @@ async def main(args: argparse.Namespace) -> int:
         await check_models(settings)
         await check_llm(settings)
         await check_embeddings(settings)
+    await check_history(settings)
+    await check_supabase(settings)
 
     print()
     print("All checks passed." if not failures else f"Failed: {', '.join(failures)}")
