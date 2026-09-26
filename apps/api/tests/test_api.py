@@ -55,9 +55,61 @@ def test_health(client: TestClient) -> None:
     assert client.get("/health").json() == {
         "status": "ok",
         "assemblyaiConfigured": True,
+        "llmProvider": "assemblyai",
+        "llmConfigured": True,
+        "llmProblem": None,
         "llmModel": "claude-sonnet-4-6",
         "llmAnalysisModel": "claude-haiku-4-5",
     }
+
+
+def test_openrouter_runs_the_whole_flow(fake_llm: FakeLLM, fake_tokens: FakeTokens) -> None:
+    with build_client(
+        fake_llm,
+        fake_tokens,
+        llm_provider="openrouter",
+        llm_api_key="or-key",
+        llm_model="vendor/big-model:free",
+        llm_fast_model="vendor/small-model:free",
+    ) as client:
+        health = client.get("/health").json()
+        assert health["llmProvider"] == "openrouter" and health["llmConfigured"] is True
+        assert health["assemblyaiConfigured"] is True  # speech still runs on AssemblyAI
+        session_id = create_session(client)
+        upload(client, session_id, "README.md", README)
+        with client.websocket_connect(
+            f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}
+        ) as ws:
+            ws.send_json(turn("t1", "How do you handle concurrent updates?"))
+            ready = receive_until(ws, "suggestion_ready")[-1]
+    assert ready["answer"]["usedContext"]
+    assert [r["model"] for r in fake_llm.requests] == [
+        "vendor/small-model:free",
+        "vendor/big-model:free",
+    ]
+    assert all(h["authorization"] == "Bearer or-key" for h in fake_llm.headers)
+    assert all(h["x-title"] == "Contexa" for h in fake_llm.headers)
+    assert all(r["provider"] == {"require_parameters": True} for r in fake_llm.requests)
+
+
+def test_llm_misconfiguration_is_reported_not_crashed(
+    fake_llm: FakeLLM, fake_tokens: FakeTokens
+) -> None:
+    with build_client(
+        fake_llm, fake_tokens, llm_provider="openrouter", llm_api_key="or-key"
+    ) as client:
+        health = client.get("/health").json()
+        assert health["llmConfigured"] is False
+        assert "LLM_MODEL is not configured" in health["llmProblem"]
+        session_id = create_session(client)
+        with client.websocket_connect(
+            f"/ws/sessions/{session_id}", headers={"origin": ORIGIN}
+        ) as ws:
+            ws.send_json(turn("t1", "How do you handle concurrent updates?"))
+            events = receive_until(ws, "suggestion_failed")
+    assert events[0]["type"] == "translation_failed"
+    assert "LLM_MODEL is not configured" in events[0]["message"]
+    assert fake_llm.requests == []  # nothing was sent anywhere
 
 
 def test_create_and_get_session_uses_camel_case(client: TestClient) -> None:

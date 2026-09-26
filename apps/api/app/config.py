@@ -1,7 +1,27 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+LLMProvider = Literal["assemblyai", "openrouter", "groq", "gemini", "openai", "custom"]
+
+# OpenAI-compatible chat completions APIs, by base URL (ending in /v1 or equivalent).
+LLM_BASE_URLS: dict[str, str] = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "openai": "https://api.openai.com/v1",
+}
+
+LLM_PROVIDER_NAMES: dict[str, str] = {
+    "assemblyai": "the AssemblyAI LLM Gateway",
+    "openrouter": "OpenRouter",
+    "groq": "Groq",
+    "gemini": "the Gemini API",
+    "openai": "OpenAI",
+    "custom": "the LLM provider",
+}
 
 
 class Settings(BaseSettings):
@@ -19,6 +39,17 @@ class Settings(BaseSettings):
     assemblyai_llm_base_url: str = "https://llm-gateway.assemblyai.com"
     assemblyai_streaming_base_url: str = "https://streaming.assemblyai.com"
     assemblyai_streaming_ws_url: str = "wss://streaming.assemblyai.com/v3/ws"
+
+    # Who translates, detects questions, and drafts answers. "assemblyai" is the AssemblyAI
+    # LLM Gateway (ASSEMBLYAI_API_KEY; not part of AssemblyAI's free plan). Every other
+    # provider is an OpenAI-compatible API called with LLM_API_KEY and LLM_MODEL.
+    llm_provider: LLMProvider = "assemblyai"
+    llm_api_key: SecretStr | None = None
+    # Only for LLM_PROVIDER=custom: an OpenAI-compatible base URL, e.g. http://host/v1.
+    llm_base_url: str = ""
+    # Override the models for any provider (required for all but assemblyai).
+    llm_model: str = ""
+    llm_fast_model: str = ""
 
     streaming_token_ttl_seconds: int = Field(60, ge=1, le=600)
     # Caps billable streaming time if a browser tab is left open.
@@ -39,14 +70,56 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
-    def analysis_model(self) -> str:
-        return self.assemblyai_llm_fast_model.strip() or self.assemblyai_llm_model
-
-    @property
     def api_key(self) -> str | None:
         if self.assemblyai_api_key is None:
             return None
         return self.assemblyai_api_key.get_secret_value() or None
+
+    @property
+    def llm_base(self) -> str:
+        """Base URL of the chat completions API: `{llm_base}/chat/completions`."""
+        if self.llm_provider == "assemblyai":
+            return f"{self.assemblyai_llm_base_url.rstrip('/')}/v1"
+        if self.llm_provider == "custom":
+            return self.llm_base_url.strip().rstrip("/")
+        return LLM_BASE_URLS[self.llm_provider]
+
+    @property
+    def llm_key(self) -> str | None:
+        if self.llm_provider == "assemblyai":
+            return self.api_key
+        if self.llm_api_key is None:
+            return None
+        return self.llm_api_key.get_secret_value().strip() or None
+
+    @property
+    def llm_name(self) -> str:
+        return LLM_PROVIDER_NAMES[self.llm_provider]
+
+    @property
+    def answer_model(self) -> str:
+        if self.llm_model.strip():
+            return self.llm_model.strip()
+        return self.assemblyai_llm_model.strip() if self.llm_provider == "assemblyai" else ""
+
+    @property
+    def analysis_model(self) -> str:
+        fast = self.llm_fast_model.strip()
+        if not fast and self.llm_provider == "assemblyai":
+            fast = self.assemblyai_llm_fast_model.strip()
+        return fast or self.answer_model
+
+    @property
+    def llm_problem(self) -> str | None:
+        """Why translations and answers can't run as configured, or None."""
+        if not self.llm_key:
+            name = "ASSEMBLYAI_API_KEY" if self.llm_provider == "assemblyai" else "LLM_API_KEY"
+            return f"{name} is not configured on the server."
+        if self.llm_provider == "custom" and not self.llm_base:
+            return "LLM_BASE_URL is not configured on the server."
+        if not self.answer_model:
+            return f"LLM_MODEL is not configured on the server (LLM_PROVIDER={self.llm_provider})."
+        return None
 
 
 @lru_cache

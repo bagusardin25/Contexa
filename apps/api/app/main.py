@@ -28,12 +28,15 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         llm = LLMGateway(
-            api_key=settings.api_key,
-            model=settings.assemblyai_llm_model,
-            base_url=settings.assemblyai_llm_base_url,
+            api_key=settings.llm_key,
+            model=settings.answer_model,
+            base_url=settings.llm_base,
             timeout=settings.llm_timeout_seconds,
             temperature=settings.llm_temperature,
             transport=llm_transport,
+            provider=settings.llm_provider,
+            name=settings.llm_name,
+            problem=settings.llm_problem,
         )
         token_client = StreamingTokenClient(
             api_key=settings.api_key,
@@ -49,7 +52,7 @@ def create_app(
         app.state.pipeline = TurnPipeline(
             llm,
             analysis_model=settings.analysis_model,
-            answer_model=settings.assemblyai_llm_model,
+            answer_model=settings.answer_model,
         )
         app.state.background_tasks = set()
         try:
@@ -78,7 +81,10 @@ def create_app(
         return {
             "status": "ok",
             "assemblyaiConfigured": settings.api_key is not None,
-            "llmModel": settings.assemblyai_llm_model,
+            "llmProvider": settings.llm_provider,
+            "llmConfigured": settings.llm_problem is None,
+            "llmProblem": settings.llm_problem,
+            "llmModel": settings.answer_model,
             "llmAnalysisModel": settings.analysis_model,
         }
 

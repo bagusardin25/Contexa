@@ -1,6 +1,8 @@
-"""First live run against AssemblyAI: every call Contexa makes, checked one by one.
+"""First live run: every call Contexa makes, checked one by one.
 
-Run it from apps/api after setting ASSEMBLYAI_API_KEY in .env:
+Speech-to-text always runs on AssemblyAI; translations and answers run on the configured
+LLM provider (LLM_PROVIDER: the AssemblyAI LLM Gateway, OpenRouter, Groq, Gemini, ...).
+Run it from apps/api after filling in .env:
 
     uv run python -m scripts.smoke_assemblyai
     uv run python -m scripts.smoke_assemblyai --wav question.wav   # also transcribe a file
@@ -11,8 +13,8 @@ The WAV file must be 16 kHz, mono, 16-bit PCM. Convert anything else with:
     ffmpeg -i input.m4a -ar 16000 -ac 1 -sample_fmt s16 question.wav
 
 It uses the server's own settings, prompts, schemas, and streaming URLs, spends a few
-cents at most (a few seconds of streaming per model and two short LLM calls), and never
-prints the API key.
+cents at most (a few seconds of streaming per model and two short LLM calls; on a free
+tier, two requests of the daily quota), and never prints API keys.
 """
 
 import argparse
@@ -53,9 +55,10 @@ EXCERPT = Excerpt(
 SAMPLE_KEYTERMS = ["Contexa", "AssemblyAI", "Supabase"]
 FREE_PLAN_HINT = (
     "If the streaming checks passed with this key, the key is fine: the LLM Gateway isn't "
-    "part of AssemblyAI's free plan (free credits cover speech only). Add a payment method "
-    "and a small balance in the AssemblyAI dashboard, then rerun."
+    "part of AssemblyAI's free plan (free credits cover speech only). Add a payment method, "
+    "or switch translations and answers to another provider with LLM_PROVIDER (e.g. openrouter)."
 )
+MAX_LISTED_MODELS = 15
 
 failures: list[str] = []
 
@@ -70,20 +73,42 @@ def report(status: str, name: str, detail: str, hint: str = "") -> bool:
 
 
 def redact(text: str, settings: Settings) -> str:
-    return text.replace(settings.api_key, "[redacted]") if settings.api_key else text
+    for secret in (settings.api_key, settings.llm_key):
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return text
 
 
-def llm_hint(message: str) -> str:
+def llm_hint(message: str, settings: Settings) -> str:
     lowered = message.lower()
-    if any(code in message for code in ("HTTP 401", "HTTP 402", "HTTP 403")) or any(
-        word in lowered for word in ("free", "credit", "balance", "payment", "billing", "upgrade")
-    ):
-        return FREE_PLAN_HINT
-    if "model" in lowered:
-        return "Check the model ids against the models list above and update apps/api/.env."
     if "timed out" in lowered:
-        return "Rerun; if it keeps timing out, raise LLM_TIMEOUT_SECONDS."
+        return "Rerun; if it keeps timing out, raise LLM_TIMEOUT_SECONDS or pick a faster model."
+    if settings.llm_provider == "assemblyai":
+        if any(code in message for code in ("HTTP 401", "HTTP 402", "HTTP 403")) or any(
+            word in lowered for word in ("free", "credit", "balance", "payment", "upgrade")
+        ):
+            return FREE_PLAN_HINT
+    elif "HTTP 401" in message or "HTTP 403" in message:
+        return f"Check LLM_API_KEY: {settings.llm_name} rejected it."
+    elif "HTTP 429" in message:
+        # Before the credits check: OpenRouter's quota message also mentions credits.
+        return (
+            "Rate-limited. Free tiers cap requests per minute and per day (OpenRouter ':free': "
+            "20/min, 50/day without credits). Wait, or switch model or provider."
+        )
+    elif "HTTP 402" in message or "credit" in lowered:
+        return (
+            "This model needs paid credits. On OpenRouter, pick a model id ending in ':free' "
+            "(listed above) or add credits."
+        )
+    if "model" in lowered or "HTTP 404" in message:
+        return "Check the model ids against the list above and update LLM_MODEL / LLM_FAST_MODEL."
     return ""
+
+
+def auth_header(settings: Settings) -> dict[str, str]:
+    key = settings.llm_key or ""
+    return {"Authorization": key if settings.llm_provider == "assemblyai" else f"Bearer {key}"}
 
 
 async def mint_token(settings: Settings, max_session_seconds: int) -> str | None:
@@ -177,54 +202,79 @@ async def check_stream(settings: Settings, language: SpeakerLanguage, audio: byt
     report("OK", name, detail)
 
 
+def listed(ids: list[str], keep) -> str:
+    chosen = [model for model in ids if keep(model)]
+    more = len(chosen) - MAX_LISTED_MODELS
+    shown = ", ".join(chosen[:MAX_LISTED_MODELS]) or "none"
+    return f"{shown} (+{more} more)" if more > 0 else shown
+
+
 async def check_models(settings: Settings) -> None:
-    wanted = {settings.analysis_model, settings.assemblyai_llm_model}
-    async with httpx.AsyncClient(base_url=settings.assemblyai_llm_base_url, timeout=15) as client:
+    name = f"LLM models ({settings.llm_provider})"
+    wanted = {settings.analysis_model, settings.answer_model}
+    async with httpx.AsyncClient(base_url=settings.llm_base, timeout=15) as client:
         try:
-            response = await client.get("/v1/models", headers={"Authorization": settings.api_key})
+            response = await client.get("/models", headers=auth_header(settings))
         except httpx.HTTPError as exc:
-            report("FAIL", "LLM Gateway models", f"couldn't reach it ({type(exc).__name__})")
+            report("FAIL", name, f"couldn't reach {settings.llm_base} ({type(exc).__name__})")
             return
     if response.status_code == 404:
-        report("SKIP", "LLM Gateway models", "no models endpoint; the calls below decide")
+        report("SKIP", name, "no models endpoint; the calls below decide")
         return
     if response.status_code >= 400:
         detail = redact(" ".join(response.text.split())[:200], settings)
-        report(
-            "FAIL",
-            "LLM Gateway models",
-            f"HTTP {response.status_code}: {detail}",
-            llm_hint(f"HTTP {response.status_code} {detail}"),
-        )
+        message = f"HTTP {response.status_code}: {detail}"
+        report("FAIL", name, message, llm_hint(message, settings))
         return
     try:
         body = response.json()
         items = body.get("data", []) if isinstance(body, dict) else body
-        ids = sorted({str(item["id"] if isinstance(item, dict) else item) for item in items})
+        # Gemini lists "models/gemini-…" but takes the bare id in requests.
+        ids = sorted(
+            {
+                str(item["id"] if isinstance(item, dict) else item).removeprefix("models/")
+                for item in items
+            }
+        )
     except (ValueError, KeyError, TypeError):
-        report("SKIP", "LLM Gateway models", "unexpected response shape; the calls below decide")
+        report("SKIP", name, "unexpected response shape; the calls below decide")
         return
-    claude = ", ".join(model for model in ids if "claude" in model) or "none"
+    if settings.llm_provider == "openrouter":
+        print(f"       free models right now: {listed(ids, lambda m: m.endswith(':free'))}")
+    elif settings.llm_provider == "assemblyai":
+        print(f"       Claude models: {listed(ids, lambda m: 'claude' in m)}")
+    else:
+        print(f"       models: {listed(ids, lambda m: True)}")
     missing = sorted(wanted - set(ids))
     if missing:
         report(
             "FAIL",
-            "LLM Gateway models",
-            f"{len(ids)} models; Claude ids: {claude}",
-            f"Not in the list: {', '.join(missing)}. Pick ids from the list for "
-            "ASSEMBLYAI_LLM_MODEL / ASSEMBLYAI_LLM_FAST_MODEL.",
+            name,
+            f"{len(ids)} models listed; not found: {', '.join(missing)}",
+            "Pick ids from the list above for LLM_MODEL / LLM_FAST_MODEL "
+            "(free OpenRouter models rotate, so an old ':free' id may be gone).",
         )
     else:
-        report("OK", "LLM Gateway models", f"{', '.join(sorted(wanted))} available")
+        report("OK", name, f"{', '.join(sorted(wanted))} available")
 
 
 async def check_llm(settings: Settings) -> None:
+    if settings.llm_problem:
+        report(
+            "FAIL",
+            "LLM configuration",
+            settings.llm_problem,
+            "Set LLM_PROVIDER, LLM_API_KEY, and LLM_MODEL in apps/api/.env (see .env.example).",
+        )
+        return
     llm = LLMGateway(
-        api_key=settings.api_key,
-        model=settings.assemblyai_llm_model,
-        base_url=settings.assemblyai_llm_base_url,
+        api_key=settings.llm_key,
+        model=settings.answer_model,
+        base_url=settings.llm_base,
         timeout=settings.llm_timeout_seconds,
         temperature=settings.llm_temperature,
+        provider=settings.llm_provider,
+        name=settings.llm_name,
     )
     try:
         name = f"Turn analysis ({settings.analysis_model})"
@@ -244,7 +294,7 @@ async def check_llm(settings: Settings) -> None:
                 )
             )
         except (LLMError, ValidationError) as exc:
-            report("FAIL", name, str(exc), llm_hint(str(exc)))
+            report("FAIL", name, str(exc), llm_hint(str(exc), settings))
         else:
             elapsed = round((time.perf_counter() - started) * 1000)
             report(
@@ -254,7 +304,7 @@ async def check_llm(settings: Settings) -> None:
                 f"id: {analysis.translation!r}",
             )
 
-        name = f"Grounded answer ({settings.assemblyai_llm_model})"
+        name = f"Grounded answer ({settings.answer_model})"
         system, user = answer_prompt(
             question=QUESTION,
             speaker="B",
@@ -272,11 +322,11 @@ async def check_llm(settings: Settings) -> None:
                     schema_name="grounded_answer",
                     schema=ANSWER_SCHEMA,
                     max_tokens=ANSWER_MAX_TOKENS,
-                    model=settings.assemblyai_llm_model,
+                    model=settings.answer_model,
                 )
             )
         except (LLMError, ValidationError) as exc:
-            report("FAIL", name, str(exc), llm_hint(str(exc)))
+            report("FAIL", name, str(exc), llm_hint(str(exc), settings))
         else:
             elapsed = round((time.perf_counter() - started) * 1000)
             report(
@@ -300,15 +350,22 @@ def load_wav(path: Path) -> bytes:
 
 async def main(args: argparse.Namespace) -> int:
     settings = Settings()
-    if not settings.api_key:
-        print("ASSEMBLYAI_API_KEY is empty. Copy .env.example to .env in apps/api and set it.")
-        return 1
-    print(f"Streaming: {settings.assemblyai_streaming_ws_url}")
-    print(f"LLM: analysis={settings.analysis_model} answers={settings.assemblyai_llm_model}\n")
+    print(f"Speech: AssemblyAI streaming at {settings.assemblyai_streaming_ws_url}")
+    print(
+        f"LLM: {settings.llm_name} at {settings.llm_base} · turns on "
+        f"{settings.analysis_model or '(unset)'}, answers on {settings.answer_model or '(unset)'}\n"
+    )
 
     # Two seconds of silence proves the connection parameters; a WAV also proves transcripts.
     audio = load_wav(args.wav) if args.wav else bytes(FRAME_BYTES * 40)
-    if await mint_token(settings, max_session_seconds=60):
+    if not settings.api_key:
+        report(
+            "FAIL",
+            "Streaming token",
+            "ASSEMBLYAI_API_KEY is empty",
+            "Copy .env.example to .env in apps/api and set it; speech always runs on AssemblyAI.",
+        )
+    elif await mint_token(settings, max_session_seconds=60):
         report("OK", "Streaming token", "minted")
         for language in args.languages:
             await check_stream(settings, language, audio)

@@ -113,6 +113,15 @@ def build_client(fake_llm: FakeLLM, fake_tokens: FakeTokens, **overrides: Any) -
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests configure Settings explicitly: a developer's exported variables (say,
+    LLM_PROVIDER=openrouter for local runs) must not change what the tests exercise."""
+    for field in Settings.model_fields:
+        monkeypatch.delenv(field.upper(), raising=False)
+        monkeypatch.delenv(field, raising=False)
+
+
 @pytest.fixture
 def fake_llm() -> FakeLLM:
     return FakeLLM()

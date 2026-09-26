@@ -69,13 +69,14 @@ def test_parse_json_content_variants() -> None:
         parse_json_content("[1, 2]")
 
 
-def _gateway(handler, api_key: str | None = "key-123") -> LLMGateway:
+def _gateway(handler, api_key: str | None = "key-123", **options) -> LLMGateway:
     return LLMGateway(
         api_key=api_key,
-        model="claude-sonnet-4-6",
-        base_url="https://llm-gateway.assemblyai.com",
+        model=options.pop("model", "claude-sonnet-4-6"),
+        base_url=options.pop("base_url", "https://llm-gateway.assemblyai.com/v1"),
         timeout=5,
         transport=httpx.MockTransport(handler),
+        **options,
     )
 
 
@@ -137,7 +138,9 @@ def test_gateway_errors_carry_the_gateway_message_without_the_key() -> None:
     with pytest.raises(LLMError) as exc:
         _complete(_gateway(forbidden))
     message = str(exc.value)
-    assert message.startswith("The LLM Gateway returned HTTP 403: LLM Gateway isn't available")
+    assert message.startswith(
+        "The AssemblyAI LLM Gateway returned HTTP 403: LLM Gateway isn't available"
+    )
     assert "key-123" not in message and "[redacted]" in message
     assert message.endswith(".")
 
@@ -166,11 +169,125 @@ def test_gateway_does_not_retry_other_bad_requests() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(400, json={"error": "response_format is not supported"})
+        return httpx.Response(400, json={"error": "max_tokens is too large for this model"})
 
-    with pytest.raises(LLMError, match="response_format is not supported"):
+    with pytest.raises(LLMError, match="max_tokens is too large"):
         _complete(_gateway(handler))
     assert len(calls) == 1
+
+
+def test_openai_compatible_request_shape() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["headers"] = request.headers
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    gateway = _gateway(
+        handler,
+        api_key="sk-or-1",
+        model="vendor/model:free",
+        base_url="https://openrouter.ai/api/v1",
+        provider="openrouter",
+        name="OpenRouter",
+    )
+    _complete(gateway)
+    assert seen["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert seen["headers"]["authorization"] == "Bearer sk-or-1"
+    assert seen["headers"]["x-title"] == "Contexa"
+    assert seen["body"]["response_format"]["type"] == "json_schema"
+    assert seen["body"]["provider"] == {"require_parameters": True}
+
+
+def test_structured_output_falls_back_to_json_mode_then_prompt() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        kind = body.get("response_format", {}).get("type")
+        if kind == "json_schema":
+            return httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "message": "No endpoints found that can handle the requested parameters."
+                    }
+                },
+            )
+        if kind == "json_object":
+            return httpx.Response(400, json={"error": {"message": "json_object is not supported"}})
+        # Prompt-only JSON, wrapped the way chatty models answer.
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": 'Sure!\n```json\n{"ok": 1}\n```'}}]},
+        )
+
+    gateway = _gateway(handler, provider="openrouter", name="OpenRouter", model="m:free")
+    schema = {"type": "object", "properties": {"ok": {"type": "integer"}}}
+    result = asyncio.run(
+        gateway.complete_json(system="Return JSON.", user="u", schema_name="x", schema=schema)
+    )
+    assert result == {"ok": 1}
+    assert [b.get("response_format", {}).get("type") for b in bodies] == [
+        "json_schema",
+        "json_object",
+        None,
+    ]
+    # The prompt now carries the schema, and OpenRouter isn't asked for parameters it lacks.
+    assert '"ok":{"type":"integer"}' in bodies[-1]["messages"][0]["content"]
+    assert "provider" not in bodies[-1]
+
+    # The model is remembered: the next call goes straight to prompt-only JSON.
+    asyncio.run(gateway.complete_json(system="s", user="u", schema_name="x", schema=schema))
+    assert "response_format" not in bodies[-1] and len(bodies) == 4
+
+
+def test_rate_limit_is_retried_once() -> None:
+    statuses = iter([429, 200])
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        status = next(statuses)
+        if status == 429:
+            return httpx.Response(429, headers={"retry-after": "0"}, json={"error": "slow down"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": 1}'}}]})
+
+    assert _complete(_gateway(handler)) == {"ok": 1}
+    assert len(calls) == 2
+
+    def always_limited(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429, headers={"retry-after": "0"}, json={"error": {"message": "free-models-per-day"}}
+        )
+
+    gateway = _gateway(always_limited, provider="openrouter", name="OpenRouter")
+    with pytest.raises(LLMError, match="OpenRouter returned HTTP 429: free-models-per-day"):
+        _complete(gateway)
+
+
+def test_misconfigured_gateway_never_calls_out() -> None:
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200)
+
+    with pytest.raises(LLMError, match="LLM_API_KEY is not configured"):
+        _complete(_gateway(handler, api_key=None, provider="groq", name="Groq"))
+    with pytest.raises(LLMError, match="LLM_MODEL is not configured"):
+        _complete(_gateway(handler, model="", provider="groq", name="Groq"))
+    with pytest.raises(LLMError, match="LLM_BASE_URL is not configured"):
+        _complete(_gateway(handler, problem="LLM_BASE_URL is not configured on the server."))
+    assert calls == []
+
+
+def test_think_blocks_are_ignored() -> None:
+    content = '<think>The user wants {"draft": true}… let me answer.</think>\n{"ok": 2}'
+    assert parse_json_content(content) == {"ok": 2}
 
 
 def test_gateway_model_override() -> None:
