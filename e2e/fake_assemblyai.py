@@ -1,30 +1,40 @@
 """Fake AssemblyAI for local end-to-end tests: token, v3 streaming WS, LLM Gateway.
 
 Turns are driven by the amount of audio received, so nothing happens unless the
-client really streams PCM16 at 16 kHz.
+client really streams PCM16 at 16 kHz. The same server also plays the web (a page to
+import), GitHub (a repository zipball), and an OpenAI-compatible embeddings API.
 """
 
 import asyncio
+import io
 import json
 import time
+import zipfile
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 API_KEY = "fake-key"
 TOKEN = "fake-token"
 BYTES_PER_MS = 32  # 16 kHz * 2 bytes / 1000
 
 app = FastAPI()
-log: dict = {"connections": [], "messages": [], "llm": [], "drop_next": False,
-             "llm_mode": "ok", "reject_next": 0}
+log: dict = {"connections": [], "messages": [], "llm": [], "embeddings": [], "drop_next": False,
+             "llm_mode": "ok", "reject_next": 0, "script": "default"}
 
-SCRIPT = [
-    # (speaker, text, start_ms, end_ms)
-    ("A", "Welcome back, everyone. Next up is a team building a realtime notes app.", 300, 2300),
-    ("B", "How does your application handle concurrent updates when two people edit the same note?", 3000, 5600),
-]
+# What the "speakers" say, picked per test with /__control/script?name=...
+SCRIPTS = {
+    "default": [
+        # (speaker, text, start_ms, end_ms, language)
+        ("A", "Welcome back, everyone. Next up is a team building a realtime notes app.", 300, 2300, "en"),
+        ("B", "How does your application handle concurrent updates when two people edit the same note?", 3000, 5600, "en"),
+    ],
+    # Only the imported web page knows the price.
+    "pricing": [("B", "How much does the Pro plan cost per month?", 300, 2600, "en")],
+    # No word in common with the English page: only semantic search can find it.
+    "pricing_id": [("B", "Berapa harga langganannya setiap bulan?", 300, 2600, "id")],
+}
 
 
 def words_for(text: str, start: int, end: int, upto: int | None = None):
@@ -69,6 +79,7 @@ async def stream(ws: WebSocket):
     received_ms = 0
     emitted_partial: dict[int, int] = {}
     finalized: set[int] = set()
+    script = SCRIPTS[log["script"]]
     try:
         while True:
             message = await ws.receive()
@@ -84,7 +95,7 @@ async def stream(ws: WebSocket):
                     record["closed_by"] = "server-drop"
                     await ws.close(code=1011, reason="simulated drop")
                     return
-                for order, (speaker, text, start, end) in enumerate(SCRIPT):
+                for order, (speaker, text, start, end, language) in enumerate(script):
                     if order in finalized or received_ms < start:
                         continue
                     if received_ms < end:
@@ -105,7 +116,7 @@ async def stream(ws: WebSocket):
                             "type": "Turn", "turn_order": order, "turn_is_formatted": True,
                             "end_of_turn": True, "transcript": text, "end_of_turn_confidence": 0.9,
                             "words": words_for(text, start, end), "speaker_label": speaker,
-                            "language_code": "en", "language_confidence": 0.99,
+                            "language_code": language, "language_confidence": 0.99,
                         })
             elif message.get("text") is not None:
                 data = json.loads(message["text"])
@@ -176,6 +187,20 @@ async def chat(request: Request):
             "action_items": ["Speaker B: kirim dokumen arsitektur lengkap"],
             "open_questions": ["Bagaimana konflik ditampilkan ke pengguna?"],
         }
+    elif name == "turn_analysis" and "Pro plan" in turn_text:
+        await asyncio.sleep(0.3)
+        content = {
+            "source_language": "en", "translation": "Berapa biaya paket Pro per bulan?",
+            "technical_terms_preserved": ["Pro"], "type": "question", "requires_answer": True,
+            "confidence": 0.96, "search_keywords": ["Pro plan", "price", "per month"],
+        }
+    elif name == "turn_analysis" and "harga" in turn_text:
+        await asyncio.sleep(0.3)
+        # Already in the display language, and no keywords: BM25 has nothing to go on.
+        content = {
+            "source_language": "id", "translation": "", "technical_terms_preserved": [],
+            "type": "question", "requires_answer": True, "confidence": 0.94, "search_keywords": [],
+        }
     elif name == "turn_analysis":
         await asyncio.sleep(0.3)
         question = "?" in turn_text
@@ -191,6 +216,18 @@ async def chat(request: Request):
             "confidence": 0.95 if question else 0.97,
             "search_keywords": ["concurrent updates", "optimistic locking", "version column"] if question else [],
         }
+    elif "Pro plan" in turn_text or "harga" in turn_text:
+        await asyncio.sleep(0.6)
+        cited = ["C1"] if "[C1]" in user else []
+        said = ("Paket Pro harganya 8 dolar per bulan per pengguna." if "harga" in turn_text
+                else "The Pro plan costs 8 dollars per month per seat.")
+        content = {
+            "question_summary": "Berapa harga paket Pro per bulan?",
+            "answer_preferred_language": "Paket Pro harganya 8 dolar per bulan per pengguna.",
+            "answer_target_language": said,
+            "used_chunk_ids": cited,
+            "confidence_note": "Berdasarkan halaman harga." if cited else "Tidak ada dokumen yang relevan.",
+        }
     else:
         await asyncio.sleep(0.6)
         cited = ["C1"] if "[C1]" in user else []
@@ -205,6 +242,89 @@ async def chat(request: Request):
     if kind == "prompt":  # chatty models wrap prompt-only JSON
         text = "Here is the JSON:\n```json\n" + text + "\n```"
     return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
+
+# Words that stand for the same idea across languages (as in apps/api/tests/conftest.py).
+CONCEPTS: dict[str, tuple[str, ...]] = {
+    "conflict": ("concurrent", "conflict", "locking", "version", "simultaneous", "bersamaan"),
+    "pricing": ("price", "pricing", "cost", "harga", "plan", "pay"),
+    "latency": ("latency", "fast", "milliseconds", "ms", "speed", "cepat"),
+    "sync": ("realtime", "broadcast", "channel", "sync", "collaborators"),
+}
+
+
+def fake_vector(text: str) -> list[float]:
+    """A deterministic embedding: one dimension per concept, plus a small common one."""
+    lowered = text.lower()
+    return [0.05] + [float(sum(lowered.count(word) for word in words)) for words in CONCEPTS.values()]
+
+
+@app.post("/v1/embeddings")
+async def embeddings(request: Request):
+    if not authorized(request):
+        return JSONResponse({"error": {"message": "Unauthorized"}}, status_code=401)
+    body = await request.json()
+    log["embeddings"].append({"model": body["model"], "inputs": len(body["input"])})
+    return {"data": [{"object": "embedding", "index": i, "embedding": fake_vector(text)}
+                     for i, text in enumerate(body["input"])]}
+
+
+NOTEWAVE_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Notewave pricing and plans</title></head>
+<body>
+<nav><a href="/">Home</a> <a href="/docs">Docs</a> <a href="/pricing">Pricing</a></nav>
+<main>
+<h1>Notewave pricing</h1>
+<p>Notewave is free for students with up to three shared notebooks and seven days of history.</p>
+<h2>Plans</h2>
+<p>The Pro plan costs 8 dollars per month per seat. It adds unlimited notebooks, a full
+version history, and priority support. Annual billing pays for ten months and gives twelve.</p>
+<h2>Campus licence</h2>
+<p>Universities pay 2 dollars per student per year for a campus licence with single sign-on
+and an admin console. The price includes onboarding for teaching staff.</p>
+</main>
+<footer>Notewave, 2026. All rights reserved.</footer>
+</body></html>
+"""
+
+
+@app.get("/pages/notewave")
+async def notewave_page():
+    return HTMLResponse(NOTEWAVE_PAGE)
+
+
+REPO_FILES = {
+    "README.md": "# Notewave\n\nRealtime collaborative notes for students.\n\n## Getting started\n\n"
+                 "Run the web app with pnpm dev and sign in with a campus account.\n",
+    "docs/architecture.md": "# Architecture\n\n## Offline mode\n\nNotes are cached in IndexedDB "
+                            "and merged when the connection returns, using the version column.\n",
+    "src/app.ts": "export const app = 1;\n",  # not documentation: the importer skips it
+}
+
+
+@app.get("/github/repos/{owner}/{repo}/zipball")
+async def github_zipball(owner: str, repo: str):
+    if owner != "acme":
+        return JSONResponse({"message": "Not Found"}, status_code=404)
+    # Like api.github.com: a redirect to codeload, which serves the archive.
+    return RedirectResponse(f"/github/codeload/{owner}/{repo}.zip", status_code=302)
+
+
+@app.get("/github/codeload/{owner}/{repo}.zip")
+async def github_codeload(owner: str, repo: str):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for path, content in REPO_FILES.items():
+            archive.writestr(f"{owner}-{repo}-1a2b3c4/{path}", content)
+    return Response(buffer.getvalue(), media_type="application/zip")
+
+
+@app.post("/__control/script")
+async def script(name: str = "default"):
+    if name not in SCRIPTS:
+        return JSONResponse({"error": f"unknown script {name}"}, status_code=400)
+    log["script"] = name
+    return {"ok": True}
 
 
 @app.post("/__control/drop")
@@ -233,8 +353,8 @@ async def slow_token(seconds: float = 0):
 
 @app.post("/__control/reset")
 async def reset_log():
-    log.update({"connections": [], "messages": [], "llm": [], "drop_next": False,
-                "llm_mode": "ok", "reject_next": 0, "token_delay": 0})
+    log.update({"connections": [], "messages": [], "llm": [], "embeddings": [], "drop_next": False,
+                "llm_mode": "ok", "reject_next": 0, "token_delay": 0, "script": "default"})
     return {"ok": True}
 
 

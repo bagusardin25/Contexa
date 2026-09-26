@@ -276,7 +276,7 @@ function statusLabel(doc: ContextDocument) {
     case "ready":
       return `Ready · ${pluralize(doc.chunkCount ?? 0, "chunk")}`;
     case "failed":
-      return "Couldn't process this file";
+      return doc.sourceUrl ? "Couldn't import this link" : "Couldn't process this file";
   }
 }
 

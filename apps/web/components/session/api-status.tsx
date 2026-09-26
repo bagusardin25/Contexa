@@ -127,7 +127,7 @@ export function ApiStatus() {
     </Button>
   );
   const { assemblyaiConfigured, llmConfigured, llmProblem, llmProvider } = health.health;
-  const { llmModel, llmAnalysisModel } = health.health;
+  const { llmModel, llmAnalysisModel, embeddingModel } = health.health;
   if (!assemblyaiConfigured) {
     return (
       <Notice
@@ -171,6 +171,12 @@ export function ApiStatus() {
         </>
       )}{" "}
       via {LLM_PROVIDER_LABELS[llmProvider] ?? llmProvider}
+      {embeddingModel ? (
+        <>
+          {" "}
+          · semantic search on <Code>{embeddingModel}</Code>
+        </>
+      ) : null}
     </Notice>
   );
 }

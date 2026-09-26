@@ -21,9 +21,27 @@ const MODE = MODES[LLM_MODE];
 const PROVIDER = MODE.name;
 
 const results = [];
-const servers = (action, name) => execSync(`${SP}/servers.sh ${action} ${name}`, { stdio: "ignore" });
-const control = (pathname) => fetch(`${FAKE}${pathname}`, { method: "POST" });
-const fakeLog = async () => (await fetch(`${FAKE}/__control/log`)).json();
+// Through bash, so it also runs on Windows (Git Bash); `env` adds EMBEDDINGS=on and the like.
+const servers = (action, name, env = {}) =>
+  execSync(`bash "${SP.replace(/\\/g, "/")}/servers.sh" ${action} ${name}`, {
+    stdio: "ignore",
+    env: { ...process.env, ...env },
+  });
+// After a pause (say, an API restart), uvicorn may close the kept-alive socket just as
+// the next request reuses it: retry once, and name the cause if that fails too.
+async function fakeFetch(pathname, init) {
+  try {
+    return await fetch(`${FAKE}${pathname}`, init);
+  } catch {
+    try {
+      return await fetch(`${FAKE}${pathname}`, init);
+    } catch (error) {
+      throw new Error(`${pathname}: ${error.message} (${error.cause?.code ?? error.cause?.message ?? "no cause"})`);
+    }
+  }
+}
+const control = (pathname) => fakeFetch(pathname, { method: "POST" });
+const fakeLog = async () => (await fakeFetch("/__control/log")).json();
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -56,6 +74,13 @@ async function upload(page, name, content) {
   fs.writeFileSync(file, content);
   await page.locator('input[type="file"]').setInputFiles(file);
 }
+
+async function addLink(page, url) {
+  await page.getByRole("textbox", { name: "Document link" }).fill(url);
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+}
+
+const documentItem = (page, name) => page.locator('ul[aria-label="Attached documents"] li').filter({ hasText: name });
 
 async function scenario(name, fn) {
   if (only.length && !only.some((key) => name.includes(key))) return;
@@ -290,7 +315,7 @@ async function scenario(name, fn) {
     // Japanese, speaker labels off.
     await page.getByRole("combobox", { name: "Speakers talk in" }).click();
     await page.getByRole("option", { name: /Japanese/ }).click();
-    await page.getByRole("switch").click();
+    await page.getByRole("switch", { name: "Label speakers" }).click();
     await chooseMicAndStart(page);
     await status(page, "Live").waitFor({ timeout: 20000 });
     await transcript(page).locator("article").first().waitFor({ timeout: 20000 });
@@ -456,6 +481,8 @@ async function scenario(name, fn) {
     const docs = await page.getByText(/Ready · \d+ chunks?/).count();
     assert(docs === 2, `documents ready after restart: ${docs}`);
     await page.getByRole("button", { name: "Stop session" }).click();
+    // Let the recap finish, so its LLM call doesn't land in the next scenario's log.
+    await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
     // The browser logs the expected network failures while the API restarts
     // (refused connections, the old session's 403/404); only script errors count.
     const unexpected = problems.filter(
@@ -558,6 +585,8 @@ async function scenario(name, fn) {
       await page.getByText("Selamat datang kembali", { exact: false }).first().waitFor({ timeout: 20000 });
       await page.getByText("We use optimistic locking with a version column.").waitFor({ timeout: 20000 });
       await page.getByRole("button", { name: "Stop session" }).click();
+      // Let the recap finish, so its LLM call doesn't land in the next scenario's log.
+      await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
       const failed = await page.getByText("Translation failed", { exact: false }).count();
       assert(failed === 0, "no translation should fail");
       const log = await fakeLog();
@@ -745,6 +774,121 @@ async function scenario(name, fn) {
     assert(problems.length === 0, problems.join("; "));
     await context.close();
     return "technical → concise redraft, 1 card; Listen spoke en-US";
+  });
+
+  await scenario("24 link import: a web page is Ready with its source, answers cite it, removal works", async () => {
+    await control("/__control/reset");
+    await control("/__control/script?name=pricing");
+    const { context, page, problems } = await openSession(browser);
+    await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+    await addLink(page, `${FAKE}/pages/notewave`);
+    // Named after the page's <title> once the API has fetched it.
+    const item = documentItem(page, "Notewave pricing and plans");
+    await item.getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+    const itemText = (await item.innerText()).replace(/\n+/g, " · ");
+    // The kind badge is uppercase through CSS.
+    assert(itemText.includes("127.0.0.1:8100/pages/notewave") && /\bweb\b/i.test(itemText), `document: ${itemText}`);
+    await addLink(page, `${FAKE}/pages/notewave`);
+    await page.getByText("This link is already attached.").waitFor({ timeout: 5000 });
+    await chooseMicAndStart(page);
+    await status(page, "Live").waitFor({ timeout: 20000 });
+    await transcript(page).getByText("How much does the Pro plan cost per month?").waitFor({ timeout: 20000 });
+    const copilot = page.getByRole("complementary", { name: "Response copilot" });
+    await copilot.getByText("The Pro plan costs 8 dollars per month per seat.").waitFor({ timeout: 20000 });
+    const evidence = await copilot.innerText();
+    assert(evidence.includes("Notewave pricing and plans · Plans"), `evidence: ${evidence}`);
+    await item.getByText("Cited").waitFor();
+    await page.getByRole("button", { name: "Stop session" }).click();
+    await page.getByText("Session ended").waitFor({ timeout: 10000 });
+    // Removing it deletes it from the API session too.
+    const deleted = page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().includes("/documents/"));
+    await item.hover();
+    await item.getByRole("button", { name: "Remove Notewave pricing and plans" }).click();
+    const response = await deleted;
+    assert(response.status() === 204, `DELETE returned ${response.status()}`);
+    const left = await page.locator('ul[aria-label="Attached documents"] li').count();
+    assert(left === 0, `documents left: ${left}`);
+    assert(problems.length === 0, problems.join("; "));
+    await context.close();
+    return itemText;
+  });
+
+  await scenario("25 link import: a GitHub repo becomes one document; a missing repo and a private address show the API's reason", async () => {
+    await control("/__control/reset");
+    const { context, page, problems } = await openSession(browser);
+    try {
+      await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+      await addLink(page, "https://github.com/acme/notewave");
+      const repo = documentItem(page, "acme/notewave");
+      await repo.getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+      const repoText = (await repo.innerText()).replace(/\n+/g, " · ");
+      assert(/\brepo\b/i.test(repoText) && repoText.includes("github.com/acme/notewave"), `repo: ${repoText}`);
+      // README (intro + Getting started) and docs/architecture.md; src/app.ts is skipped.
+      assert(repoText.includes("Ready · 3 chunks"), `README and docs only: ${repoText}`);
+      await addLink(page, "github.com/nobody/missing");
+      const missing = documentItem(page, "github.com/nobody/missing");
+      await missing.getByText("Couldn't import this link").waitFor({ timeout: 15000 });
+      const missingText = await missing.innerText();
+      assert(missingText.includes("GitHub has no public repository nobody/missing"), missingText);
+      await missing.hover();
+      await missing.getByRole("button", { name: /^Remove / }).click();
+      // Production settings: links to local or private addresses are refused before any request.
+      servers("start", "api", { IMPORTS: "public" });
+      await addLink(page, "http://localhost/admin");
+      const local = documentItem(page, "localhost/admin");
+      await local.getByText("Couldn't import this link").waitFor({ timeout: 20000 });
+      const localText = await local.innerText();
+      assert(localText.includes("That address points to a private or local network"), localText);
+      // The restarted API lost the session; the repository was imported again into the new one.
+      await repo.getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+      const documents = await page.locator('ul[aria-label="Attached documents"] li').count();
+      assert(documents === 2, `documents: ${documents}`);
+      // The browser logs the rejected imports and the lost session itself; only script errors count.
+      const unexpected = problems.filter((p) => !/status of (404|422)/.test(p));
+      assert(unexpected.length === 0, unexpected.join("; "));
+      const reason = (text) => text.split("\n").find((line) => /GitHub has no|private or local/.test(line));
+      return `${reason(missingText)} | ${reason(localText)}`;
+    } finally {
+      await context.close();
+      servers("start", "api");
+    }
+  });
+
+  await scenario("26 semantic retrieval: an Indonesian question with no shared words finds the imported page by meaning", async () => {
+    await control("/__control/reset");
+    await control("/__control/script?name=pricing_id");
+    servers("start", "api", { EMBEDDINGS: "on" });
+    try {
+      const { context, page, problems } = await openSession(browser);
+      const banner = page.getByText("Connected to the Contexa API");
+      await banner.waitFor({ timeout: 10000 });
+      const bannerText = await banner.innerText();
+      assert(bannerText.includes("semantic search on fake-embed"), `banner: ${bannerText}`);
+      await page.getByRole("combobox", { name: "Speakers talk in" }).click();
+      await page.getByRole("option", { name: /Indonesian/ }).click();
+      await addLink(page, `${FAKE}/pages/notewave`);
+      await documentItem(page, "Notewave pricing and plans").getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+      await page.getByText("searched by keyword and by meaning", { exact: false }).waitFor();
+      await chooseMicAndStart(page);
+      await status(page, "Live").waitFor({ timeout: 20000 });
+      await transcript(page).getByText("Berapa harga langganannya setiap bulan?").waitFor({ timeout: 20000 });
+      const copilot = page.getByRole("complementary", { name: "Response copilot" });
+      await copilot.getByText("Paket Pro harganya 8 dolar per bulan per pengguna.").first().waitFor({ timeout: 20000 });
+      const evidence = await copilot.innerText();
+      // The question shares no word with the English page, and the analysis gave no keywords.
+      assert(evidence.includes("Notewave pricing and plans · Plans"), `evidence: ${evidence}`);
+      await page.getByRole("button", { name: "Stop session" }).click();
+      const log = await fakeLog();
+      const analysis = log.llm.filter((c) => c.name === "turn_analysis");
+      assert(analysis.length === 1, `analysis calls: ${analysis.length}`);
+      // One call for the page's chunks, one for the question.
+      assert(log.embeddings.length >= 2 && log.embeddings.every((e) => e.model === "fake-embed"), JSON.stringify(log.embeddings));
+      assert(problems.length === 0, problems.join("; "));
+      await context.close();
+      return `${log.embeddings.length} embedding calls (${log.embeddings.map((e) => e.inputs).join(", ")} inputs)`;
+    } finally {
+      servers("start", "api");
+    }
   });
 
   await browser.close();
