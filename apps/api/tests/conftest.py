@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 
 import httpx
@@ -106,7 +106,23 @@ class FakeTokens:
         return httpx.Response(200, json={"token": "temp-token-123", "expires_in_seconds": 60})
 
 
-def build_client(fake_llm: FakeLLM, fake_tokens: FakeTokens, **overrides: Any) -> TestClient:
+def build_client(
+    fake_llm: FakeLLM,
+    fake_tokens: FakeTokens,
+    *,
+    embeddings: "FakeEmbeddings | None" = None,
+    web: "Callable[[httpx.Request], httpx.Response] | None" = None,
+    resolver: "Callable[[str, int], Awaitable[list[str]]] | None" = None,
+    **overrides: Any,
+) -> TestClient:
+    if embeddings is not None:
+        overrides = {
+            "embedding_provider": "custom",
+            "embedding_base_url": "https://embeddings.test/v1",
+            "embedding_api_key": "emb-key",
+            "embedding_model": "fake-embed",
+            **overrides,
+        }
     settings = Settings(
         _env_file=None,
         assemblyai_api_key=overrides.pop("assemblyai_api_key", "test-key"),
@@ -117,8 +133,48 @@ def build_client(fake_llm: FakeLLM, fake_tokens: FakeTokens, **overrides: Any) -
         settings,
         llm_transport=httpx.MockTransport(fake_llm.handler),
         streaming_transport=httpx.MockTransport(fake_tokens.handler),
+        embedding_transport=httpx.MockTransport(embeddings.handler) if embeddings else None,
+        import_transport=httpx.MockTransport(web) if web else None,
+        import_resolver=resolver,
     )
     return TestClient(app)
+
+
+# Words that stand for the same idea in the fake embedding space, across languages.
+CONCEPTS: dict[str, tuple[str, ...]] = {
+    "conflict": ("concurrent", "conflict", "locking", "version", "simultaneous", "bersamaan"),
+    "pricing": ("price", "pricing", "cost", "harga", "plan", "pay"),
+    "latency": ("latency", "fast", "milliseconds", "ms", "speed", "cepat"),
+    "sync": ("realtime", "broadcast", "channel", "sync", "collaborators"),
+}
+
+
+def fake_vector(text: str) -> list[float]:
+    """A deterministic embedding: one dimension per concept, plus a small common one."""
+    lowered = text.lower()
+    return [0.05] + [
+        float(sum(lowered.count(word) for word in words)) for words in CONCEPTS.values()
+    ]
+
+
+class FakeEmbeddings:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.headers: list[httpx.Headers] = []
+        self.failing = False
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        self.requests.append(payload)
+        self.headers.append(request.headers)
+        if self.failing:
+            return httpx.Response(429, json={"error": {"message": "quota exceeded"}})
+        data = [
+            {"object": "embedding", "index": i, "embedding": fake_vector(text)}
+            for i, text in enumerate(payload["input"])
+        ]
+        # Out of order on purpose: clients must sort by index.
+        return httpx.Response(200, json={"data": list(reversed(data))})
 
 
 @pytest.fixture(autouse=True)
@@ -138,6 +194,11 @@ def fake_llm() -> FakeLLM:
 @pytest.fixture
 def fake_tokens() -> FakeTokens:
     return FakeTokens()
+
+
+@pytest.fixture
+def fake_embeddings() -> FakeEmbeddings:
+    return FakeEmbeddings()
 
 
 @pytest.fixture

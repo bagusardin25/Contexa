@@ -22,6 +22,7 @@ from app.models.session import (
     TurnOut,
 )
 from app.rag.index import LexicalIndex
+from app.rag.vectors import VectorIndex
 
 MAX_TURNS_PER_SESSION = 5000
 
@@ -40,6 +41,8 @@ class DocumentRecord:
     chunk_count: int | None = None
     error: str | None = None
     keyterms: list[str] = field(default_factory=list)
+    embedded: bool = False
+    source_url: str | None = None
 
     def to_out(self) -> DocumentOut:
         return DocumentOut(
@@ -51,6 +54,8 @@ class DocumentRecord:
             chunk_count=self.chunk_count,
             error=self.error,
             keyterms=self.keyterms,
+            embedded=self.embedded,
+            source_url=self.source_url,
         )
 
 
@@ -64,6 +69,7 @@ class SessionState:
     suggestions: dict[str, SuggestionOut] = field(default_factory=dict)
     documents: dict[str, DocumentRecord] = field(default_factory=dict)
     index: LexicalIndex = field(default_factory=LexicalIndex)
+    vectors: VectorIndex = field(default_factory=VectorIndex)
     tokens_issued: int = 0
     last_active: float = field(default_factory=time.monotonic)
 

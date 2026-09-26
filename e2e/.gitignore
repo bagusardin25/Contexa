@@ -1,0 +1,7 @@
+*
+!.gitignore
+!README.md
+!fake_assemblyai.py
+!servers.sh
+!suite.js
+!tone.wav

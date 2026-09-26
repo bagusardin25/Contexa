@@ -1,10 +1,17 @@
-import { type ApiDocument, api, errorDetail, unreachableMessage } from "@/lib/api/client";
+import {
+  type ApiDocument,
+  ApiError,
+  api,
+  errorDetail,
+  unreachableMessage,
+} from "@/lib/api/client";
 import type { ApiSessionManager } from "@/lib/api/session";
 
-import type { DocumentUpdate, DocumentUploader, UploadRequest } from "./uploader";
+import type { DocumentUpdate, DocumentUploader, ImportRequest, UploadRequest } from "./uploader";
 
 interface Upload {
-  request: UploadRequest;
+  /** A file to upload, or a link the server fetches. */
+  request: UploadRequest | ImportRequest;
   onUpdate: (update: DocumentUpdate) => void;
   /** Bumped per attempt, so a superseded request can't overwrite a newer one. */
   attempt: number;
@@ -36,7 +43,11 @@ export class LiveUploader implements DocumentUploader {
     });
   }
 
-  upload(request: UploadRequest, onUpdate: (update: DocumentUpdate) => void) {
+  importLink(request: ImportRequest, onUpdate: (update: DocumentUpdate) => void) {
+    this.upload(request, onUpdate);
+  }
+
+  upload(request: UploadRequest | ImportRequest, onUpdate: (update: DocumentUpdate) => void) {
     this.uploads.set(request.documentId, {
       request,
       onUpdate,
@@ -85,6 +96,10 @@ export class LiveUploader implements DocumentUploader {
     upload.xhr?.abort();
     upload.xhr = null;
     upload.storedIn = null;
+    if (!("file" in request)) {
+      await this.sendLink(upload, request, current);
+      return;
+    }
     onUpdate({ status: "uploading", progress: 0, error: null, chunkCount: null, keyterms: [] });
 
     let sessionId: string;
@@ -137,6 +152,7 @@ export class LiveUploader implements DocumentUploader {
         chunkCount: stored.chunkCount,
         error: stored.error,
         keyterms: stored.keyterms ?? [],
+        embedded: stored.embedded ?? false,
       });
       this.session.notifyDocumentsChanged();
     };
@@ -147,5 +163,58 @@ export class LiveUploader implements DocumentUploader {
     };
     xhr.open("POST", api.documentsUrl(sessionId));
     xhr.send(form);
+  }
+
+  /** `POST /documents/import`: the server fetches the link, then parses and indexes it. */
+  private async sendLink(upload: Upload, request: ImportRequest, current: () => boolean) {
+    const { onUpdate } = upload;
+    onUpdate({ status: "importing", progress: 0, error: null, chunkCount: null, keyterms: [] });
+
+    let sessionId: string;
+    try {
+      sessionId = await this.session.ensure();
+    } catch (error) {
+      if (current()) onUpdate({ status: "failed", error: (error as Error).message });
+      return;
+    }
+    if (!current()) return;
+
+    try {
+      const stored = await api.importDocument(sessionId, {
+        url: request.url,
+        documentId: request.documentId,
+      });
+      if (!current()) {
+        // Removed while the server was fetching it: don't leave it in the session.
+        if (!this.uploads.has(request.documentId)) {
+          void api.deleteDocument(sessionId, request.documentId).catch(() => undefined);
+        }
+        return;
+      }
+      upload.storedIn = sessionId;
+      onUpdate({
+        status: stored.status,
+        progress: 100,
+        chunkCount: stored.chunkCount,
+        error: stored.error,
+        keyterms: stored.keyterms ?? [],
+        name: stored.name,
+        kind: stored.kind,
+        sizeBytes: stored.sizeBytes,
+        sourceUrl: stored.sourceUrl ?? request.url,
+        embedded: stored.embedded ?? false,
+      });
+      this.session.notifyDocumentsChanged();
+    } catch (error) {
+      if (!current()) return;
+      if (error instanceof ApiError && error.status === 404) {
+        // Unknown session: recreating it imports every document again, this one included.
+        void this.session.recreate(sessionId).catch((reason: unknown) => {
+          if (current()) onUpdate({ status: "failed", error: (reason as Error).message });
+        });
+        return;
+      }
+      onUpdate({ status: "failed", error: (error as Error).message });
+    }
   }
 }

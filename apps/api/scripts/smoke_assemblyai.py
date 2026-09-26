@@ -35,6 +35,7 @@ from app.assemblyai.routing import SAMPLE_RATE, speech_model_for, websocket_url
 from app.assemblyai.tokens import StreamingTokenClient, StreamingTokenError
 from app.config import Settings
 from app.conversation.pipeline import ANALYSIS_MAX_TOKENS, ANSWER_MAX_TOKENS
+from app.llm.embeddings import EmbeddingClient, EmbeddingError, cosine
 from app.llm.gateway import LLMError, LLMGateway
 from app.llm.prompts import Excerpt, answer_prompt, turn_analysis_prompt
 from app.models.ai import ANSWER_SCHEMA, TURN_ANALYSIS_SCHEMA, AnswerDraft, TurnAnalysis
@@ -73,7 +74,7 @@ def report(status: str, name: str, detail: str, hint: str = "") -> bool:
 
 
 def redact(text: str, settings: Settings) -> str:
-    for secret in (settings.api_key, settings.llm_key):
+    for secret in (settings.api_key, settings.llm_key, settings.embedding_key):
         if secret:
             text = text.replace(secret, "[redacted]")
     return text
@@ -338,6 +339,54 @@ async def check_llm(settings: Settings) -> None:
         await llm.aclose()
 
 
+async def check_embeddings(settings: Settings) -> None:
+    name = f"Embeddings ({settings.embedding_model_name or 'none'})"
+    if not settings.embeddings_enabled:
+        report(
+            "SKIP",
+            name,
+            "semantic search is off, so retrieval uses BM25 only",
+            "",
+        )
+        print(
+            "       -> For semantic search, set EMBEDDING_PROVIDER=gemini and EMBEDDING_API_KEY "
+            "(a free Google AI Studio key)."
+        )
+        return
+    client = EmbeddingClient(
+        api_key=settings.embedding_key,
+        model=settings.embedding_model_name,
+        base_url=settings.embedding_base,
+        timeout=settings.llm_timeout_seconds,
+        dimensions=settings.embedding_dimensions,
+    )
+    try:
+        texts = [
+            "How do you handle two people editing the same note?",
+            "Writes use optimistic locking on a version column.",
+            "Pricing will be decided after the pilot.",
+        ]
+        started = time.perf_counter()
+        question, related, unrelated = await client.embed(texts)
+        elapsed = round((time.perf_counter() - started) * 1000)
+        report(
+            "OK",
+            name,
+            f"{elapsed} ms · {len(question)} dimensions · similarity related "
+            f"{cosine(question, related):.2f} vs unrelated {cosine(question, unrelated):.2f} "
+            f"(RETRIEVAL_MIN_SIMILARITY={settings.retrieval_min_similarity})",
+        )
+    except EmbeddingError as exc:
+        report(
+            "FAIL",
+            name,
+            redact(str(exc), settings),
+            "Check EMBEDDING_API_KEY and EMBEDDING_MODEL; answers still work with BM25 only.",
+        )
+    finally:
+        await client.aclose()
+
+
 def load_wav(path: Path) -> bytes:
     with wave.open(str(path), "rb") as wav:
         if (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) != (SAMPLE_RATE, 1, 2):
@@ -372,6 +421,7 @@ async def main(args: argparse.Namespace) -> int:
     if not args.skip_llm:
         await check_models(settings)
         await check_llm(settings)
+        await check_embeddings(settings)
 
     print()
     print("All checks passed." if not failures else f"Failed: {', '.join(failures)}")

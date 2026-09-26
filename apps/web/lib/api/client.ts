@@ -32,6 +32,8 @@ export interface ApiDocument {
   chunkCount: number | null;
   error: string | null;
   keyterms: string[];
+  embedded?: boolean;
+  sourceUrl?: string | null;
 }
 
 export interface ApiSession {
@@ -146,6 +148,9 @@ export const api = {
   /** The end-of-session recap, written from the transcript the browser sends. */
   recap: (input: RecapInput) => request<SessionRecap>("/api/recap", json("POST", input)),
   documentsUrl: (id: string) => `${baseUrl()}${session(id)}/documents`,
+  /** A document from a link: web page, PDF, Markdown file, or GitHub repository. */
+  importDocument: (id: string, body: { url: string; documentId: string }) =>
+    request<ApiDocument>(`${session(id)}/documents/import`, json("POST", body)),
   /** `WS /ws/sessions/{id}`: final turns in, translations and answers out. */
   socketUrl: (id: string) => `${baseUrl().replace(/^http/, "ws")}/ws/sessions/${encodeURIComponent(id)}`,
 };

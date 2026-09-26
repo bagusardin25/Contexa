@@ -10,6 +10,9 @@ from app.api import realtime, recap, sessions
 from app.assemblyai.tokens import StreamingTokenClient
 from app.config import Settings, get_settings
 from app.conversation.pipeline import TurnPipeline
+from app.documents.fetch import GitHubClient, Resolver, SafeFetcher, system_resolver
+from app.documents.importing import Importer
+from app.llm.embeddings import EmbeddingClient
 from app.llm.gateway import LLMGateway
 from app.store.memory import MemoryStore
 
@@ -21,6 +24,9 @@ def create_app(
     *,
     llm_transport: httpx.AsyncBaseTransport | None = None,
     streaming_transport: httpx.AsyncBaseTransport | None = None,
+    embedding_transport: httpx.AsyncBaseTransport | None = None,
+    import_transport: httpx.AsyncBaseTransport | None = None,
+    import_resolver: Resolver | None = None,
 ) -> FastAPI:
     """Build the app. Transports are injectable so tests never call AssemblyAI."""
     settings = settings or get_settings()
@@ -39,6 +45,28 @@ def create_app(
             name=settings.llm_name,
             problem=settings.llm_problem,
         )
+        embedder = EmbeddingClient(
+            api_key=settings.embedding_key,
+            model=settings.embedding_model_name,
+            base_url=settings.embedding_base,
+            timeout=settings.llm_timeout_seconds,
+            dimensions=settings.embedding_dimensions,
+            transport=embedding_transport,
+        )
+        importer = Importer(
+            SafeFetcher(
+                max_bytes=settings.max_import_bytes,
+                allow_private=settings.import_allow_private_hosts,
+                transport=import_transport,
+                resolver=import_resolver or system_resolver,
+            ),
+            GitHubClient(
+                api_base_url=settings.github_api_base_url,
+                token=settings.github_token.get_secret_value() if settings.github_token else None,
+                max_bytes=settings.max_repo_download_bytes,
+                transport=import_transport,
+            ),
+        )
         token_client = StreamingTokenClient(
             api_key=settings.api_key,
             base_url=settings.assemblyai_streaming_base_url,
@@ -49,17 +77,23 @@ def create_app(
             max_sessions=settings.max_sessions, ttl_hours=settings.session_ttl_hours
         )
         app.state.llm = llm
+        app.state.embedder = embedder
+        app.state.importer = importer
         app.state.token_client = token_client
         app.state.pipeline = TurnPipeline(
             llm,
             analysis_model=settings.analysis_model,
             answer_model=settings.answer_model,
+            embedder=embedder,
+            min_similarity=settings.retrieval_min_similarity,
         )
         app.state.background_tasks = set()
         try:
             yield
         finally:
             await llm.aclose()
+            await embedder.aclose()
+            await importer.aclose()
             await token_client.aclose()
 
     app = FastAPI(
@@ -88,6 +122,10 @@ def create_app(
             "llmProblem": settings.llm_problem,
             "llmModel": settings.answer_model,
             "llmAnalysisModel": settings.analysis_model,
+            # Semantic search over documents (and history); null = BM25 only.
+            "embeddingModel": settings.embedding_model_name
+            if settings.embeddings_enabled
+            else None,
         }
 
     return app

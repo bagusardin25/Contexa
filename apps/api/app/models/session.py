@@ -11,7 +11,9 @@ SpeechModel = Literal["universal-3-5-pro", "whisper-rt"]
 TurnType = Literal["statement", "question", "action_request", "other"]
 SuggestionStage = Literal["retrieving", "generating", "ready", "failed"]
 SuggestionTrigger = Literal["auto", "manual"]
-DocumentKind = Literal["pdf", "docx", "md", "txt"]
+# "web" is a page imported from a URL (converted to Markdown before parsing); "repo" is a
+# GitHub repository's README and docs, one section per file.
+DocumentKind = Literal["pdf", "docx", "md", "txt", "web", "repo"]
 AnswerStyle = Literal["concise", "professional", "technical", "casual"]
 
 
@@ -38,6 +40,13 @@ class SessionConfigUpdate(CamelModel):
 DOCUMENT_ID_PATTERN = r"^[A-Za-z0-9_.:-]+$"
 
 
+class ImportRequest(CamelModel):
+    """A link to import: a web page, a PDF or Markdown file, or a GitHub repository."""
+
+    url: str = Field(min_length=4, max_length=2048)
+    document_id: str | None = Field(None, min_length=1, max_length=64, pattern=DOCUMENT_ID_PATTERN)
+
+
 class DocumentOut(CamelModel):
     id: str
     name: str
@@ -48,6 +57,10 @@ class DocumentOut(CamelModel):
     error: str | None
     # Distinctive terms found in the document, sent to AssemblyAI as keyterms.
     keyterms: list[str]
+    # Its chunks have embeddings, so semantic search covers it too.
+    embedded: bool = False
+    # Where an imported document came from (a web page or a GitHub file).
+    source_url: str | None = None
 
 
 class SessionOut(CamelModel):

@@ -60,6 +60,8 @@ export interface SessionActions {
   selectSuggestion: (suggestionId: string) => void;
   addFiles: (files: File[], options?: { sample?: boolean }) => RejectedFile[];
   addSampleDocuments: () => void;
+  /** Imports a link (web page, PDF, GitHub repository); returns why it can't, or null. */
+  addLink: (url: string) => string | null;
   retryDocument: (documentId: string) => void;
   removeDocument: (documentId: string) => void;
   simulate: (simulation: PreviewSimulation) => void;
@@ -386,6 +388,34 @@ export function createSessionStore({
         }
       }
       return rejected;
+    },
+
+    addLink: (url) => {
+      const link = url.trim();
+      if (!uploader.importLink) return "Importing links needs the Contexa API.";
+      if (!link) return "Paste a link first.";
+      if (/\s/.test(link)) return "That doesn't look like a web address.";
+      if (get().documents.some((doc) => doc.sourceUrl === link)) {
+        return "This link is already attached.";
+      }
+      const doc: ContextDocument = {
+        id: createId("doc"),
+        name: link.replace(/^https?:\/\//i, "").replace(/\/+$/, ""),
+        kind: /^(https?:\/\/)?(www\.)?github\.com\//i.test(link) ? "repo" : "web",
+        sizeBytes: 0,
+        status: "importing",
+        progress: 0,
+        chunkCount: null,
+        error: null,
+        sample: false,
+        keyterms: [],
+        sourceUrl: link,
+      };
+      set((state) => ({ documents: [...state.documents, doc] }));
+      uploader.importLink({ documentId: doc.id, url: link }, (update) =>
+        set((state) => ({ documents: patchDocument(state.documents, doc.id, update) })),
+      );
+      return null;
     },
 
     addSampleDocuments: () =>

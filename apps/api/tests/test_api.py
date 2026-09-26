@@ -60,6 +60,7 @@ def test_health(client: TestClient) -> None:
         "llmProblem": None,
         "llmModel": "claude-sonnet-4-6",
         "llmAnalysisModel": "claude-haiku-4-5",
+        "embeddingModel": None,
     }
 
 

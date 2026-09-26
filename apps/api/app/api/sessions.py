@@ -7,14 +7,15 @@ from starlette.concurrency import run_in_threadpool
 
 from app.assemblyai.routing import ENCODING, SAMPLE_RATE, speech_model_for, websocket_url
 from app.assemblyai.tokens import StreamingTokenError
-from app.documents.chunking import chunk_sections
-from app.documents.keyterms import extract_keyterms
-from app.documents.parsing import DocumentParseError, parse_document
-from app.documents.validation import UploadRejected, content_problem, detect_kind, sanitize_filename
+from app.documents.fetch import ImportFailed
+from app.documents.importing import build_document
+from app.documents.ingest import ingest_document, ingest_sections
+from app.documents.validation import UploadRejected, detect_kind, sanitize_filename
 from app.models.session import (
     DOCUMENT_ID_PATTERN,
     AnswerRequest,
     DocumentOut,
+    ImportRequest,
     SessionConfig,
     SessionConfigUpdate,
     SessionOut,
@@ -24,7 +25,15 @@ from app.models.session import (
 )
 from app.store.memory import DocumentRecord, new_id
 
-from .deps import PipelineDep, SessionDep, SettingsDep, StoreDep, TokenClientDep
+from .deps import (
+    EmbedderDep,
+    ImporterDep,
+    PipelineDep,
+    SessionDep,
+    SettingsDep,
+    StoreDep,
+    TokenClientDep,
+)
 
 logger = logging.getLogger("contexa.api")
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -108,6 +117,7 @@ async def upload_document(
     file: UploadFile,
     session: SessionDep,
     settings: SettingsDep,
+    embedder: EmbedderDep,
     document_id: Annotated[
         str | None,
         Form(alias="documentId", min_length=1, max_length=64, pattern=DOCUMENT_ID_PATTERN),
@@ -141,23 +151,42 @@ async def upload_document(
     record = DocumentRecord(
         id=document_id or new_id("doc"), name=name, kind=kind, size_bytes=len(data), status="failed"
     )
-    problem = content_problem(data, kind)
-    if problem is None:
-        try:
-            sections = await run_in_threadpool(parse_document, data, kind)
-            keyterms = await run_in_threadpool(extract_keyterms, sections)
-            chunks = chunk_sections(sections, record.id, name)
-            session.index.add(chunks)
-            record.status, record.chunk_count = "ready", len(chunks)
-            record.keyterms = keyterms
-        except DocumentParseError as exc:
-            problem = str(exc)
-    record.error = problem
-    session.documents[record.id] = record
-    logger.info(
-        "document %s session=%s kind=%s status=%s", record.id, session.id, kind, record.status
+    return (await ingest_document(session, record, data, embedder)).to_out()
+
+
+@router.post("/{session_id}/documents/import", status_code=status.HTTP_201_CREATED)
+async def import_document(
+    body: ImportRequest,
+    session: SessionDep,
+    settings: SettingsDep,
+    embedder: EmbedderDep,
+    importer: ImporterDep,
+) -> DocumentOut:
+    """A document from a link: a web page, a PDF or Markdown file, or a GitHub repository
+    (its README and docs as one document). The server fetches it; private networks are
+    off limits."""
+    if body.document_id is not None and body.document_id in session.documents:
+        raise HTTPException(status_code=409, detail="A document with this id is already attached.")
+    if len(session.documents) >= settings.max_documents_per_session:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A session can hold up to {settings.max_documents_per_session} documents.",
+        )
+    try:
+        url, payload, target = await importer.fetch(body.url)
+        imported = await run_in_threadpool(build_document, url, payload, target)
+    except ImportFailed as exc:
+        logger.info("import failed session=%s: %s", session.id, exc.message)
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    record = DocumentRecord(
+        id=body.document_id or new_id("doc"),
+        name=imported.name,
+        kind=imported.kind,
+        size_bytes=imported.size_bytes,
+        status="failed",
+        source_url=imported.source_url,
     )
-    return record.to_out()
+    return (await ingest_sections(session, record, imported.sections, embedder)).to_out()
 
 
 @router.delete("/{session_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -165,6 +194,7 @@ async def delete_document(document_id: str, session: SessionDep) -> Response:
     if session.documents.pop(document_id, None) is None:
         raise HTTPException(status_code=404, detail="Document not found.")
     session.index.remove_document(document_id)
+    session.vectors.remove_document(document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

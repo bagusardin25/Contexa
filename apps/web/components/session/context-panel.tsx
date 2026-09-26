@@ -4,8 +4,10 @@ import { useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   AudioLinesIcon,
+  ExternalLinkIcon,
   FileUpIcon,
   LibraryIcon,
+  LinkIcon,
   LoaderCircleIcon,
   RotateCwIcon,
   ShieldCheckIcon,
@@ -16,6 +18,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { fetchSampleFiles } from "@/lib/documents/sample-files";
 import { ACCEPT_ATTRIBUTE } from "@/lib/documents/validate";
@@ -40,6 +43,7 @@ export function ContextPanel() {
   );
   const isPreview = useIsPreview();
   const hasSamples = documents.some((doc) => doc.sample);
+  const semantic = documents.some((doc) => doc.embedded);
   const [loadingSamples, setLoadingSamples] = useState(false);
 
   const handleFiles = (files: File[], options?: { sample?: boolean }) => {
@@ -85,6 +89,7 @@ export function ContextPanel() {
       />
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         <DocumentDropzone onFiles={handleFiles} />
+        <LinkImport disabled={isPreview} />
 
         {documents.length === 0 ? (
           <div className="rounded-xl border border-dashed p-4 text-center">
@@ -111,8 +116,9 @@ export function ContextPanel() {
         <div className="space-y-2 text-xs leading-relaxed text-muted-foreground">
           <p className="flex gap-2">
             <ShieldCheckIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            Documents are split into chunks and searched only within this session. Answers show
-            the passages they use.
+            Documents are split into chunks and searched by keyword
+            {semantic ? " and by meaning" : ""}, only within this session. Answers show the
+            passages they use.
           </p>
           <p className="flex gap-2">
             <AudioLinesIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -128,6 +134,45 @@ export function ContextPanel() {
         </div>
       </div>
     </div>
+  );
+}
+
+function LinkImport({ disabled }: { disabled: boolean }) {
+  const addLink = useSession((state) => state.addLink);
+  const [link, setLink] = useState("");
+
+  return (
+    <form
+      className="space-y-1.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const problem = addLink(link);
+        if (problem) toast.error("Couldn't add the link", { description: problem });
+        else setLink("");
+      }}
+    >
+      <div className="flex gap-2">
+        <Input
+          type="text"
+          inputMode="url"
+          value={link}
+          disabled={disabled}
+          onChange={(event) => setLink(event.target.value)}
+          placeholder="Paste a link to a page, PDF, or GitHub repo"
+          aria-label="Document link"
+          className="h-8 min-w-0 text-xs"
+        />
+        <Button type="submit" size="sm" variant="outline" disabled={disabled || !link.trim()}>
+          <LinkIcon />
+          Add
+        </Button>
+      </div>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        {disabled
+          ? "Links are fetched by the Contexa API, so they work in live sessions."
+          : "A GitHub repository brings its README and docs."}
+      </p>
+    </form>
   );
 }
 
@@ -220,6 +265,8 @@ function KeytermList({ keyterms }: { keyterms: string[] }) {
 
 function statusLabel(doc: ContextDocument) {
   switch (doc.status) {
+    case "importing":
+      return doc.kind === "repo" ? "Downloading the repository…" : "Fetching the page…";
     case "uploading":
       return `Uploading · ${doc.progress}%`;
     case "parsing":
@@ -245,7 +292,11 @@ function DocumentItem({
   onRetry?: () => void;
   onRemove: () => void;
 }) {
-  const processing = doc.status === "uploading" || doc.status === "parsing" || doc.status === "indexing";
+  const processing =
+    doc.status === "importing" ||
+    doc.status === "uploading" ||
+    doc.status === "parsing" ||
+    doc.status === "indexing";
 
   return (
     <li
@@ -269,7 +320,8 @@ function DocumentItem({
                 doc.status === "failed" && "text-destructive",
               )}
             >
-              {formatBytes(doc.sizeBytes)} · {statusLabel(doc)}
+              {doc.sizeBytes > 0 ? `${formatBytes(doc.sizeBytes)} · ` : ""}
+              {statusLabel(doc)}
             </p>
             {doc.sample ? (
               <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
@@ -282,6 +334,18 @@ function DocumentItem({
               </Badge>
             ) : null}
           </div>
+          {doc.sourceUrl ? (
+            <a
+              href={/^https?:\/\//i.test(doc.sourceUrl) ? doc.sourceUrl : `https://${doc.sourceUrl}`}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <span className="truncate">{doc.sourceUrl.replace(/^https?:\/\//i, "")}</span>
+              <ExternalLinkIcon className="size-3 shrink-0" aria-hidden />
+              <span className="sr-only">(opens in a new tab)</span>
+            </a>
+          ) : null}
           {processing ? (
             <Progress value={doc.status === "uploading" ? doc.progress : null} className="mt-2" />
           ) : null}

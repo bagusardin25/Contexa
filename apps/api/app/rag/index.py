@@ -1,7 +1,7 @@
 """Lexical retrieval (BM25) over a session's document chunks.
 
 PRD §16 asks for a fallback that works without an embedding provider; this is it.
-An embedding retriever (Supabase + pgvector) can sit behind the same `search` call.
+With embeddings configured, `app/rag/hybrid.py` fuses it with semantic search.
 """
 
 import math
@@ -52,6 +52,9 @@ class LexicalIndex:
 
     def __len__(self) -> int:
         return len(self._chunks)
+
+    def get(self, chunk_id: str) -> Chunk | None:
+        return self._chunks.get(chunk_id)
 
     def add(self, chunks: list[Chunk]) -> None:
         for chunk in chunks:
@@ -136,6 +139,11 @@ class LexicalIndex:
             if len(results) == limit:
                 break
         return results
+
+
+def keyword_highlights(content: str, keywords: list[str]) -> list[str]:
+    """Highlights for a chunk found by meaning rather than by its words."""
+    return _highlights(content, keywords, set())
 
 
 def _highlights(content: str, keywords: list[str], terms: set[str]) -> list[str]:

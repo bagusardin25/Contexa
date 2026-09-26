@@ -14,6 +14,16 @@ LLM_BASE_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
 }
 
+EmbeddingProvider = Literal["none", "gemini", "openai", "custom"]
+EMBEDDING_BASE_URLS: dict[str, str] = {
+    "gemini": LLM_BASE_URLS["gemini"],
+    "openai": LLM_BASE_URLS["openai"],
+}
+EMBEDDING_DEFAULT_MODELS: dict[str, str] = {
+    "gemini": "gemini-embedding-001",
+    "openai": "text-embedding-3-small",
+}
+
 LLM_PROVIDER_NAMES: dict[str, str] = {
     "assemblyai": "the AssemblyAI LLM Gateway",
     "openrouter": "OpenRouter",
@@ -56,6 +66,26 @@ class Settings(BaseSettings):
     # Caps billable streaming time if a browser tab is left open.
     streaming_max_session_seconds: int = Field(3600, ge=60, le=10800)
     streaming_tokens_per_session: int = Field(30, ge=1)
+
+    # Semantic retrieval (embeddings), fused with BM25. Empty follows LLM_PROVIDER when that
+    # provider has embeddings (gemini, openai); "none" keeps BM25 only. Groq and OpenRouter
+    # users can point this at Gemini's free tier with its own key.
+    embedding_provider: EmbeddingProvider | None = None
+    embedding_api_key: SecretStr | None = None
+    embedding_model: str = ""
+    embedding_base_url: str = ""
+    embedding_dimensions: int | None = Field(None, ge=64, le=4096)
+    # Cosine similarity a passage needs before semantic search may cite it.
+    retrieval_min_similarity: float = Field(0.5, ge=0, le=1)
+
+    # Documents from links: web pages, PDFs, and GitHub repositories (README + docs).
+    max_import_bytes: int = 5 * 1024 * 1024
+    max_repo_download_bytes: int = 30 * 1024 * 1024
+    # Optional: private repositories and a higher GitHub rate limit (60/hour without one).
+    github_token: SecretStr | None = None
+    github_api_base_url: str = "https://api.github.com"
+    # Local testing only: lets imports reach localhost and private networks.
+    import_allow_private_hosts: bool = False
 
     llm_timeout_seconds: float = Field(15.0, gt=0)
     llm_temperature: float | None = 0.2
@@ -113,6 +143,35 @@ class Settings(BaseSettings):
         if not fast and self.llm_provider == "assemblyai":
             fast = self.assemblyai_llm_fast_model.strip()
         return fast or self.answer_model
+
+    @property
+    def embedding_kind(self) -> str:
+        if self.embedding_provider is not None:
+            return self.embedding_provider
+        return self.llm_provider if self.llm_provider in EMBEDDING_BASE_URLS else "none"
+
+    @property
+    def embedding_key(self) -> str | None:
+        kind = self.embedding_kind
+        if kind == "none":
+            return None
+        if self.embedding_api_key is not None:
+            return self.embedding_api_key.get_secret_value().strip() or None
+        # Same provider as the LLM: its key works for embeddings too.
+        return self.llm_key if kind == self.llm_provider else None
+
+    @property
+    def embedding_base(self) -> str:
+        override = self.embedding_base_url.strip().rstrip("/")
+        return override or EMBEDDING_BASE_URLS.get(self.embedding_kind, "")
+
+    @property
+    def embedding_model_name(self) -> str:
+        return self.embedding_model.strip() or EMBEDDING_DEFAULT_MODELS.get(self.embedding_kind, "")
+
+    @property
+    def embeddings_enabled(self) -> bool:
+        return bool(self.embedding_key and self.embedding_base and self.embedding_model_name)
 
     @property
     def llm_problem(self) -> str | None:

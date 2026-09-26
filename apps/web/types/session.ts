@@ -137,8 +137,10 @@ export interface Suggestion {
   latencyMs: number | null;
 }
 
-export type DocumentKind = "pdf" | "docx" | "md" | "txt";
+/** `web` is a page imported from a link; `repo` a GitHub repository's README and docs. */
+export type DocumentKind = "pdf" | "docx" | "md" | "txt" | "web" | "repo";
 export type DocumentStatus =
+  | "importing"
   | "uploading"
   | "parsing"
   | "indexing"
@@ -158,6 +160,10 @@ export interface ContextDocument {
   sample: boolean;
   /** Distinctive terms found in the document, sent to AssemblyAI as keyterms. */
   keyterms: string[];
+  /** The link an imported document came from. */
+  sourceUrl?: string | null;
+  /** Its chunks have embeddings, so semantic search covers it too. */
+  embedded?: boolean;
 }
 
 /**

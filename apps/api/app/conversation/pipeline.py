@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import ValidationError
 
+from app.llm.embeddings import EmbeddingClient, EmbeddingError
 from app.llm.gateway import LLMError, LLMGateway
 from app.llm.prompts import ContextLine, Excerpt, answer_prompt, turn_analysis_prompt
 from app.models.ai import ANSWER_SCHEMA, TURN_ANALYSIS_SCHEMA, AnswerDraft, TurnAnalysis
@@ -36,6 +37,7 @@ from app.models.session import (
     TurnIn,
     TurnOut,
 )
+from app.rag.hybrid import hybrid_search
 from app.rag.index import make_snippet
 from app.store.memory import SessionState, new_id
 
@@ -82,8 +84,18 @@ def _context_lines(turns: list[TurnOut]) -> list[ContextLine]:
 
 
 class TurnPipeline:
-    def __init__(self, llm: LLMGateway, *, analysis_model: str, answer_model: str) -> None:
+    def __init__(
+        self,
+        llm: LLMGateway,
+        *,
+        analysis_model: str,
+        answer_model: str,
+        embedder: EmbeddingClient | None = None,
+        min_similarity: float = 0.5,
+    ) -> None:
         self._llm = llm
+        self._embedder = embedder
+        self._min_similarity = min_similarity
         # Analysis runs on every finished turn, so it uses the faster model (latency budget:
         # translation < 2 s). Grounded answers use the stronger one.
         self._analysis_model = analysis_model
@@ -219,7 +231,7 @@ class TurnPipeline:
             )
         )
 
-        evidence = self._retrieve(session, turn)
+        evidence = await self._retrieve(session, turn)
         suggestion.evidence = evidence
         suggestion.stage = "generating"
         await emit(SuggestionEvidence(suggestion_id=suggestion.id, evidence=evidence))
@@ -289,11 +301,27 @@ class TurnPipeline:
         )
         return suggestion
 
-    def _retrieve(self, session: SessionState, turn: TurnOut) -> list[Evidence]:
+    async def _retrieve(self, session: SessionState, turn: TurnOut) -> list[Evidence]:
+        """BM25 over the session's chunks, fused with semantic search when it's configured."""
         texts = [turn.text]
         if turn.translation:
             texts.append(turn.translation.text)
-        results = session.index.search(texts, turn.search_keywords, limit=MAX_EVIDENCE)
+        query_vector = None
+        if self._embedder is not None and self._embedder.enabled and len(session.vectors):
+            query = "\n".join([turn.text, ", ".join(turn.search_keywords)]).strip()
+            try:
+                [query_vector] = await self._embedder.embed([query])
+            except EmbeddingError as exc:
+                logger.warning("query embedding failed session=%s: %s", session.id, exc)
+        results = hybrid_search(
+            session.index,
+            session.vectors,
+            texts=texts,
+            keywords=turn.search_keywords,
+            query_vector=query_vector,
+            limit=MAX_EVIDENCE,
+            min_similarity=self._min_similarity,
+        )
         return [
             Evidence(
                 chunk_id=result.chunk.id,
