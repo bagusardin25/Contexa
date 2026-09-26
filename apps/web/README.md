@@ -8,11 +8,15 @@ Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · Tailwind CSS v4 
 
 ```bash
 npm install
-cp .env.example .env.local   # optional: Supabase keys for sign-in
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL for the live pipeline; Supabase keys for sign-in
 npm run dev      # http://localhost:3000
 npm run lint
 npm run build
 ```
+
+`NEXT_PUBLIC_API_URL` (e.g. `http://localhost:8000`) switches `/session` to the live pipeline
+against the Contexa API; without it, `/session` runs the scripted preview. `NEXT_PUBLIC_*`
+values are inlined when the app is built or the dev server starts, so restart after changing it.
 
 Deploying to Vercel: set the project's root directory to `apps/web`.
 
@@ -55,11 +59,33 @@ How it fits together:
   them. Opened on another device, the email still gets confirmed and the page asks the person to
   sign in there.
 
+## Live pipeline
+
+`createSessionServices()` (`lib/session/services.ts`) picks the live transport and uploader when
+`NEXT_PUBLIC_API_URL` is set. Both share one backend session (`lib/api/session.ts`).
+
+- `LiveTransport` (`lib/session/live-transport.ts`) captures a shared tab or the microphone,
+  turns it into 50 ms frames of 16 kHz PCM16 in an AudioWorklet (`public/audio/pcm16-processor.js`),
+  and streams them to AssemblyAI with a short-lived token from the API. Partial turns only update
+  the screen; final turns go to the API over `WS /ws/sessions/{id}`, and the server's events
+  (translation, classification, evidence, answer) feed the store.
+- Turn ids include the connection segment (`s2-t0`), because AssemblyAI restarts `turn_order`
+  after a reconnect. Dropped streams reconnect up to 3 times with fresh tokens. Stop, errors,
+  and leaving the page send `Terminate`, so no billed stream stays open.
+- Keyterms follow the documents: the stream URL carries them, and adding or removing a document
+  mid-session sends an `UpdateConfiguration`.
+- If the API restarts, the relay notices, a new backend session is created, documents are
+  re-uploaded, and manual requests re-send their turn first.
+- `LiveUploader` (`lib/documents/live-uploader.ts`) posts files with the browser's document id,
+  reports upload progress, shows each document's keyterms, and supports Retry.
+- The setup screen checks `/health` first and says when the API is unreachable or has no
+  AssemblyAI key. **Load sample project docs** uploads the real files in `public/samples/`.
+
 ## Preview mode
 
-The backend isn't connected yet, so `/session` runs on `PreviewTransport`
+Without `NEXT_PUBLIC_API_URL`, `/session` runs on `PreviewTransport`
 (`lib/session/preview-transport.ts`). It replays a scripted English or Japanese Q&A and emits
-exactly the events the live pipeline will emit, with realistic timing. The UI labels it with a
+exactly the events the live pipeline emits, with realistic timing. The UI labels it with a
 **Preview** badge, and the badge menu simulates failures: connection drop, translation failure,
 answer failure, permission denied, and missing tab audio.
 
@@ -78,17 +104,15 @@ components/auth/      sign-in forms, Google button, header account menu
 lib/supabase/         Supabase clients (browser, server, proxy) and config
 lib/auth/             validation, error messages, safe redirects
 hooks/                small client hooks (clock, clipboard, auto-scroll, theme)
-lib/session/          transport contract, preview transport, Zustand store, Markdown export
-lib/documents/        upload validation, uploader contract, sample documents
+lib/session/          transports (live, preview), audio capture, Zustand store, Markdown export
+lib/api/              Contexa API client and the shared backend session
+lib/documents/        upload validation, live and preview uploaders, sample documents
 lib/languages.ts      language catalogue and AssemblyAI model routing
+public/audio/         AudioWorklet that produces AssemblyAI's 16 kHz PCM16 frames
+public/samples/       sample project documents for live sessions
 types/session.ts      domain types and the normalized SessionEvent union
 ```
 
-## Connecting the live pipeline
-
-Implement `SessionTransport` (`lib/session/transport.ts`) and `DocumentUploader`
-(`lib/documents/uploader.ts`) against the FastAPI backend, then return them from
-`createTransport()` and `createUploader()`. The UI only consumes `SessionEvent`s, so no component
-needs to change.
-
-`ASSEMBLYAI_API_KEY` stays on the backend. The browser only receives short-lived streaming tokens.
+The UI only consumes `SessionEvent`s from a `SessionTransport` (`lib/session/transport.ts`), so
+the live and preview pipelines share every component. `ASSEMBLYAI_API_KEY` stays on the backend;
+the browser only receives short-lived streaming tokens.
