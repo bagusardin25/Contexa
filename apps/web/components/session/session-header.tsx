@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { UserMenu } from "@/components/auth/user-menu";
 import { Logo } from "@/components/brand/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,7 @@ export function SessionHeader() {
         <SessionRoute className="hidden md:inline-flex" />
         {isPreview ? <PreviewMenu /> : null}
         <ThemeToggle />
+        <UserMenu />
       </div>
     </header>
   );
