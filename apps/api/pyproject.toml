@@ -20,6 +20,7 @@ dev = [
     "httpx2>=2.13.1",
     "pytest>=9.1",
     "ruff>=0.14",
+    "websockets>=15",
 ]
 
 [tool.uv]
