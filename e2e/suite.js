@@ -998,6 +998,66 @@ async function scenario(name, fn) {
     }
   });
 
+  await scenario("29 floating window: pops out while live with the latest turns and the ready-to-say answer", async () => {
+    await control("/__control/reset");
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    await context.grantPermissions(["microphone"], { origin: "http://localhost:3000" });
+    await context.addInitScript(() => {
+      // Document Picture-in-Picture, played by an ordinary popup window.
+      window.documentPictureInPicture = {
+        window: null,
+        requestWindow: async ({ width, height } = {}) => window.open("", "_blank", `width=${width},height=${height}`),
+      };
+      window.__spoken = [];
+      const synth = {
+        speaking: false,
+        getVoices: () => [],
+        cancel() { this.current?.onend?.(); this.current = null; },
+        speak(utterance) { this.current = utterance; window.__spoken.push({ text: utterance.text, lang: utterance.lang }); },
+      };
+      Object.defineProperty(window, "speechSynthesis", { value: synth, configurable: true });
+      window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; this.lang = ""; } };
+    });
+    const page = await context.newPage();
+    const problems = [];
+    page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
+    await page.goto(APP);
+    await page.getByRole("button", { name: "Load sample project docs" }).click();
+    await page.getByText(/Ready · \d+ chunks?/).nth(1).waitFor({ timeout: 15000 });
+    assert((await page.getByRole("button", { name: "Pop out" }).count()) === 0, "Pop out shows while live only");
+    await chooseMicAndStart(page);
+    await status(page, "Live").waitFor({ timeout: 20000 });
+    const [popup] = await Promise.all([
+      page.waitForEvent("popup"),
+      page.getByRole("button", { name: "Pop out" }).click(),
+    ]);
+    const floating = popup.getByRole("region", { name: "Floating copilot" });
+    await floating.waitFor({ timeout: 10000 });
+    await floating.getByText(QUESTION, { exact: false }).waitFor({ timeout: 20000 });
+    await floating.getByText("Bagaimana aplikasi Anda menangani concurrent updates", { exact: false }).waitFor({ timeout: 20000 });
+    const answer = floating.getByRole("region", { name: "Ready to say" });
+    await answer.getByText("We use optimistic locking with a version column.").waitFor({ timeout: 20000 });
+    // The app's styles came along: the answer panel has the primary tint, not a bare page.
+    const styled = await popup.evaluate(() => {
+      const box = document.querySelector('[aria-label="Ready to say"]');
+      return document.styleSheets.length > 0 && getComputedStyle(box).borderTopWidth === "1px";
+    });
+    assert(styled, "the floating window should carry the app's stylesheets");
+    await answer.getByRole("button", { name: "Listen" }).click();
+    const spoken = await page.evaluate(() => window.__spoken);
+    assert(spoken.at(-1)?.text === "We use optimistic locking with a version column.", JSON.stringify(spoken));
+    await answer.getByRole("button", { name: "Stop" }).click();
+    // Closing the window resets the button.
+    assert((await page.getByRole("button", { name: "Close pop-out" }).getAttribute("aria-pressed")) === "true", "button state while open");
+    await popup.close();
+    await page.getByRole("button", { name: "Pop out" }).waitFor({ timeout: 5000 });
+    await page.getByRole("button", { name: "Stop session" }).click();
+    await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
+    assert(problems.length === 0, problems.join("; "));
+    await context.close();
+    return `popup showed the question, its translation, and the answer; Listen spoke ${spoken.at(-1).lang}`;
+  });
+
   await browser.close();
   const skipped = results.filter((r) => r.skipped).length;
   const failed = results.filter((r) => !r.ok);
