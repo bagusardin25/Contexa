@@ -1,12 +1,15 @@
 import { createStore } from "zustand/vanilla";
 
 import { SAMPLE_DOCUMENTS } from "@/lib/documents/sample-documents";
+import type { MeetingIn } from "@/lib/history/client";
+import { meetingFromSession, newMeetingId } from "@/lib/history/meeting";
 import type { DocumentUpdate, DocumentUploader } from "@/lib/documents/uploader";
 import { validateFile } from "@/lib/documents/validate";
 import { createId } from "@/lib/utils";
 import type {
   AnswerStyle,
   ContextDocument,
+  HistoryState,
   PartialTurn,
   RecapState,
   SessionConfig,
@@ -39,6 +42,12 @@ export interface SessionState {
   recap: RecapState;
   /** The recording for the `file` audio source; kept across sessions like the config. */
   audioFile: File | null;
+  /** Id the session is saved under in the meeting history; set when it starts listening. */
+  meetingId: string | null;
+  /** Saving the finished session to the history. */
+  history: HistoryState;
+  /** The API has a history database (from `/health`); always false in the preview. */
+  historyAvailable: boolean;
 }
 
 export interface RejectedFile {
@@ -57,6 +66,9 @@ export interface SessionActions {
   retryTranslation: (turnId: string) => void;
   /** Writes the recap of a stopped session; runs on its own when the session stops. */
   generateRecap: () => Promise<void>;
+  /** Saves the stopped session to the history; runs on its own once the recap settles. */
+  saveToHistory: () => Promise<void>;
+  setHistoryAvailable: (available: boolean) => void;
   selectSuggestion: (suggestionId: string) => void;
   addFiles: (files: File[], options?: { sample?: boolean }) => RejectedFile[];
   addSampleDocuments: () => void;
@@ -78,6 +90,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   audioSource: "tab",
   speakerLabels: true,
   answerStyle: "professional",
+  saveHistory: true,
 };
 
 const EMPTY_SESSION = {
@@ -93,7 +106,9 @@ const EMPTY_SESSION = {
   audioLevel: 0,
   streamKeyterms: [],
   recap: { status: "idle" },
-} satisfies Omit<SessionState, "config" | "documents" | "audioFile">;
+  meetingId: null,
+  history: { status: "idle" },
+} satisfies Omit<SessionState, "config" | "documents" | "audioFile" | "historyAvailable">;
 
 const UNKNOWN_ERROR: SessionError = {
   code: "unknown",
@@ -147,7 +162,10 @@ export function applyEvent(
       }
       const patch: Partial<SessionState> = { status };
       if (status === "requesting_permission") patch.error = null;
-      if (status === "listening" && state.startedAt === null) patch.startedAt = Date.now();
+      if (status === "listening" && state.startedAt === null) {
+        patch.startedAt = Date.now();
+        patch.meetingId = newMeetingId();
+      }
       if (status === "stopped") patch.endedAt = Date.now();
       if (status === "error") patch.error = event.error ?? UNKNOWN_ERROR;
       if (status !== "listening") patch.audioLevel = 0;
@@ -264,20 +282,29 @@ export function applyEvent(
   }
 }
 
+/** Where finished sessions are saved; the preview has none. */
+export interface HistorySaver {
+  save: (meetingId: string, meeting: MeetingIn) => Promise<unknown>;
+}
+
 export function createSessionStore({
   transport,
   uploader,
+  history,
 }: {
   transport: SessionTransport;
   uploader: DocumentUploader;
+  history?: HistorySaver;
 }) {
-  // Bumped by New session so a late recap can't land in the next conversation.
+  // Bumped by New session so a late recap or save can't land in the next conversation.
   let recapRun = 0;
+  let historyRun = 0;
 
   const store = createStore<SessionStore>()((set, get) => ({
     config: DEFAULT_CONFIG,
     documents: [],
     audioFile: null,
+    historyAvailable: false,
     ...EMPTY_SESSION,
 
     updateConfig: (patch) => set((state) => ({ config: { ...state.config, ...patch } })),
@@ -301,6 +328,7 @@ export function createSessionStore({
 
     newSession: () => {
       recapRun += 1;
+      historyRun += 1;
       transport.reset();
       set({ ...EMPTY_SESSION });
     },
@@ -342,13 +370,37 @@ export function createSessionStore({
             type: turn.classification?.type ?? null,
           })),
         });
-        if (run === recapRun) set({ recap: { status: "ready", recap: result, language } });
+        if (run !== recapRun) return;
+        set({ recap: { status: "ready", recap: result, language } });
       } catch (error) {
         if (run !== recapRun) return;
         const message = error instanceof Error ? error.message : "Couldn't write the recap.";
         set({ recap: { status: "failed", message } });
       }
+      // Saved with the recap, or without it when it failed; a Retry recap saves again.
+      void get().saveToHistory();
     },
+
+    saveToHistory: async () => {
+      const state = get();
+      if (!history || !state.historyAvailable || !state.config.saveHistory) return;
+      const { meetingId, status } = state;
+      if (status !== "stopped" || !meetingId || state.recap.status === "loading") return;
+      const meeting = meetingFromSession(state);
+      if (!meeting) return;
+      const run = ++historyRun;
+      set({ history: { status: "saving" } });
+      try {
+        await history.save(meetingId, meeting);
+        if (run === historyRun) set({ history: { status: "saved", meetingId } });
+      } catch (error) {
+        if (run !== historyRun) return;
+        const message = error instanceof Error ? error.message : "Couldn't save to the history.";
+        set({ history: { status: "failed", message } });
+      }
+    },
+
+    setHistoryAvailable: (historyAvailable) => set({ historyAvailable }),
 
     selectSuggestion: (suggestionId) => set({ activeSuggestionId: suggestionId }),
 

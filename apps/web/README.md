@@ -24,6 +24,8 @@ Deploying to Vercel: set the project's root directory to `apps/web`.
 
 - `/`: landing page that explains the product in one screen
 - `/session`: the live session workspace (setup → live transcript → response copilot → summary)
+- `/history`: saved sessions, search across them by meaning, and one session in full
+  (`/history?id=…&turn=…` opens it at a turn)
 - `/login`, `/register`, `/forgot-password`, `/reset-password`: optional sign-in (see below)
 - `/auth/callback`: where Google OAuth and auth email links land
 
@@ -79,6 +81,11 @@ How it fits together:
   re-uploaded, and manual requests re-send their turn first.
 - `LiveUploader` (`lib/documents/live-uploader.ts`) posts files with the browser's document id,
   reports upload progress, shows each document's keyterms, and supports Retry.
+- **Paste a link** (Context panel) imports a web page, a PDF on the web, or a GitHub repository
+  through `POST /documents/import`: the API fetches it, so it works in live sessions only.
+  Imported documents show their source link and are imported again if the API session is
+  recreated. With embeddings on, the setup notice names the embedding model and the panel says
+  documents are searched "by keyword and by meaning".
 - The setup screen checks `/health` first: it names the LLM provider and models in use, and says
   when the API is unreachable, has no AssemblyAI key, or has no LLM configured (the transcript
   still works then). An API on free hosting that is waking up gets a "Waking up" notice; the
@@ -90,6 +97,17 @@ How it fits together:
 - When a session stops, the store asks for a recap (`POST /api/recap` with the transcript the
   browser holds): a summary, key points, action items, and open questions in the reading
   language. It has a Retry, and **Export .md** includes it.
+- Once the recap settles (written or failed), the session is saved to the history
+  (`PUT /api/meetings/{id}`, built by `lib/history/meeting.ts`), and saved again after a
+  successful Retry recap. The setup screen shows **Save to history** only when `/health` says
+  `historyEnabled`; the ended session shows "Saving…", "Saved to history · Open", or the reason
+  with a Retry. Signed-in users send their Supabase access token; everyone sends a random device
+  key kept in localStorage (`lib/history/identity.ts`), which the API stores hashed.
+- **Pop out** (control bar, while live, in browsers with Document Picture-in-Picture: Chrome and
+  Edge on desktop) opens a small always-on-top window with the status, the last three turns
+  and their translations, and the ready-to-say answer with Copy and Listen
+  (`components/session/floating-window.tsx`). It renders through a React portal, so it reads
+  the same store; the app's stylesheets and theme are copied into it.
 
 ## Preview mode
 
@@ -110,7 +128,8 @@ returns a cautious answer instead of inventing facts.
 app/                  routes: landing page, /session, (auth) pages, /auth/callback
 proxy.ts              session refresh for the pages that read auth on the server
 components/ui/        shadcn/ui-style primitives
-components/session/   workspace: setup, conversation, copilot, context, control bar
+components/session/   workspace: setup, conversation, copilot, context, control bar, pop-out
+components/history/   /history: saved sessions, search, one session in full
 components/landing/   landing page sections
 components/auth/      sign-in forms, Google button, header account menu
 lib/supabase/         Supabase clients (browser, server, proxy) and config
@@ -119,6 +138,7 @@ hooks/                small client hooks (clock, clipboard, auto-scroll, theme)
 lib/session/          transports (live, preview), audio capture, Zustand store, Markdown export
 lib/api/              Contexa API client and the shared backend session
 lib/documents/        upload validation, live and preview uploaders, sample documents
+lib/history/          history API client, device identity, saved-session builder
 lib/languages.ts      language catalogue and AssemblyAI model routing
 public/audio/         AudioWorklet that produces AssemblyAI's 16 kHz PCM16 frames
 public/samples/       sample project documents for live sessions

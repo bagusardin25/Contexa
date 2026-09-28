@@ -21,9 +21,27 @@ const MODE = MODES[LLM_MODE];
 const PROVIDER = MODE.name;
 
 const results = [];
-const servers = (action, name) => execSync(`${SP}/servers.sh ${action} ${name}`, { stdio: "ignore" });
-const control = (pathname) => fetch(`${FAKE}${pathname}`, { method: "POST" });
-const fakeLog = async () => (await fetch(`${FAKE}/__control/log`)).json();
+// Through bash, so it also runs on Windows (Git Bash); `env` adds EMBEDDINGS=on and the like.
+const servers = (action, name, env = {}) =>
+  execSync(`bash "${SP.replace(/\\/g, "/")}/servers.sh" ${action} ${name}`, {
+    stdio: "ignore",
+    env: { ...process.env, ...env },
+  });
+// After a pause (say, an API restart), uvicorn may close the kept-alive socket just as
+// the next request reuses it: retry once, and name the cause if that fails too.
+async function fakeFetch(pathname, init) {
+  try {
+    return await fetch(`${FAKE}${pathname}`, init);
+  } catch {
+    try {
+      return await fetch(`${FAKE}${pathname}`, init);
+    } catch (error) {
+      throw new Error(`${pathname}: ${error.message} (${error.cause?.code ?? error.cause?.message ?? "no cause"})`);
+    }
+  }
+}
+const control = (pathname) => fakeFetch(pathname, { method: "POST" });
+const fakeLog = async () => (await fakeFetch("/__control/log")).json();
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -57,6 +75,19 @@ async function upload(page, name, content) {
   await page.locator('input[type="file"]').setInputFiles(file);
 }
 
+async function addLink(page, url) {
+  await page.getByRole("textbox", { name: "Document link" }).fill(url);
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+}
+
+const documentItem = (page, name) => page.locator('ul[aria-label="Attached documents"] li').filter({ hasText: name });
+
+class Skipped extends Error {}
+/** Ends a scenario that needs something this machine doesn't have (say, a database). */
+function skip(reason) {
+  throw new Skipped(reason);
+}
+
 async function scenario(name, fn) {
   if (only.length && !only.some((key) => name.includes(key))) return;
   const started = Date.now();
@@ -65,6 +96,11 @@ async function scenario(name, fn) {
     results.push({ name, ok: true, notes });
     console.log(`PASS ${name} (${((Date.now() - started) / 1000).toFixed(1)} s)${notes ? ` · ${notes}` : ""}`);
   } catch (error) {
+    if (error instanceof Skipped) {
+      results.push({ name, ok: true, skipped: true, notes: error.message });
+      console.log(`SKIP ${name}: ${error.message}`);
+      return;
+    }
     results.push({ name, ok: false, notes: error.message });
     console.log(`FAIL ${name}: ${error.message.split("\n")[0]}`);
   }
@@ -290,7 +326,7 @@ async function scenario(name, fn) {
     // Japanese, speaker labels off.
     await page.getByRole("combobox", { name: "Speakers talk in" }).click();
     await page.getByRole("option", { name: /Japanese/ }).click();
-    await page.getByRole("switch").click();
+    await page.getByRole("switch", { name: "Label speakers" }).click();
     await chooseMicAndStart(page);
     await status(page, "Live").waitFor({ timeout: 20000 });
     await transcript(page).locator("article").first().waitFor({ timeout: 20000 });
@@ -456,6 +492,8 @@ async function scenario(name, fn) {
     const docs = await page.getByText(/Ready · \d+ chunks?/).count();
     assert(docs === 2, `documents ready after restart: ${docs}`);
     await page.getByRole("button", { name: "Stop session" }).click();
+    // Let the recap finish, so its LLM call doesn't land in the next scenario's log.
+    await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
     // The browser logs the expected network failures while the API restarts
     // (refused connections, the old session's 403/404); only script errors count.
     const unexpected = problems.filter(
@@ -558,6 +596,8 @@ async function scenario(name, fn) {
       await page.getByText("Selamat datang kembali", { exact: false }).first().waitFor({ timeout: 20000 });
       await page.getByText("We use optimistic locking with a version column.").waitFor({ timeout: 20000 });
       await page.getByRole("button", { name: "Stop session" }).click();
+      // Let the recap finish, so its LLM call doesn't land in the next scenario's log.
+      await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
       const failed = await page.getByText("Translation failed", { exact: false }).count();
       assert(failed === 0, "no translation should fail");
       const log = await fakeLog();
@@ -747,8 +787,281 @@ async function scenario(name, fn) {
     return "technical → concise redraft, 1 card; Listen spoke en-US";
   });
 
+  await scenario("24 link import: a web page is Ready with its source, answers cite it, removal works", async () => {
+    await control("/__control/reset");
+    await control("/__control/script?name=pricing");
+    const { context, page, problems } = await openSession(browser);
+    await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+    await addLink(page, `${FAKE}/pages/notewave`);
+    // Named after the page's <title> once the API has fetched it.
+    const item = documentItem(page, "Notewave pricing and plans");
+    await item.getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+    const itemText = (await item.innerText()).replace(/\n+/g, " · ");
+    // The kind badge is uppercase through CSS.
+    assert(itemText.includes("127.0.0.1:8100/pages/notewave") && /\bweb\b/i.test(itemText), `document: ${itemText}`);
+    await addLink(page, `${FAKE}/pages/notewave`);
+    await page.getByText("This link is already attached.").waitFor({ timeout: 5000 });
+    await chooseMicAndStart(page);
+    await status(page, "Live").waitFor({ timeout: 20000 });
+    await transcript(page).getByText("How much does the Pro plan cost per month?").waitFor({ timeout: 20000 });
+    const copilot = page.getByRole("complementary", { name: "Response copilot" });
+    await copilot.getByText("The Pro plan costs 8 dollars per month per seat.").waitFor({ timeout: 20000 });
+    const evidence = await copilot.innerText();
+    assert(evidence.includes("Notewave pricing and plans · Plans"), `evidence: ${evidence}`);
+    await item.getByText("Cited").waitFor();
+    await page.getByRole("button", { name: "Stop session" }).click();
+    await page.getByText("Session ended").waitFor({ timeout: 10000 });
+    // Removing it deletes it from the API session too.
+    const deleted = page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().includes("/documents/"));
+    await item.hover();
+    await item.getByRole("button", { name: "Remove Notewave pricing and plans" }).click();
+    const response = await deleted;
+    assert(response.status() === 204, `DELETE returned ${response.status()}`);
+    const left = await page.locator('ul[aria-label="Attached documents"] li').count();
+    assert(left === 0, `documents left: ${left}`);
+    assert(problems.length === 0, problems.join("; "));
+    await context.close();
+    return itemText;
+  });
+
+  await scenario("25 link import: a GitHub repo becomes one document; a missing repo and a private address show the API's reason", async () => {
+    await control("/__control/reset");
+    const { context, page, problems } = await openSession(browser);
+    try {
+      await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+      await addLink(page, "https://github.com/acme/notewave");
+      const repo = documentItem(page, "acme/notewave");
+      await repo.getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+      const repoText = (await repo.innerText()).replace(/\n+/g, " · ");
+      assert(/\brepo\b/i.test(repoText) && repoText.includes("github.com/acme/notewave"), `repo: ${repoText}`);
+      // README (intro + Getting started) and docs/architecture.md; src/app.ts is skipped.
+      assert(repoText.includes("Ready · 3 chunks"), `README and docs only: ${repoText}`);
+      await addLink(page, "github.com/nobody/missing");
+      const missing = documentItem(page, "github.com/nobody/missing");
+      await missing.getByText("Couldn't import this link").waitFor({ timeout: 15000 });
+      const missingText = await missing.innerText();
+      assert(missingText.includes("GitHub has no public repository nobody/missing"), missingText);
+      await missing.hover();
+      await missing.getByRole("button", { name: /^Remove / }).click();
+      // Production settings: links to local or private addresses are refused before any request.
+      servers("start", "api", { IMPORTS: "public" });
+      await addLink(page, "http://localhost/admin");
+      const local = documentItem(page, "localhost/admin");
+      await local.getByText("Couldn't import this link").waitFor({ timeout: 20000 });
+      const localText = await local.innerText();
+      assert(localText.includes("That address points to a private or local network"), localText);
+      // The restarted API lost the session; the repository was imported again into the new one.
+      await repo.getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+      const documents = await page.locator('ul[aria-label="Attached documents"] li').count();
+      assert(documents === 2, `documents: ${documents}`);
+      // The browser logs the rejected imports and the lost session itself; only script errors count.
+      const unexpected = problems.filter((p) => !/status of (404|422)/.test(p));
+      assert(unexpected.length === 0, unexpected.join("; "));
+      const reason = (text) => text.split("\n").find((line) => /GitHub has no|private or local/.test(line));
+      return `${reason(missingText)} | ${reason(localText)}`;
+    } finally {
+      await context.close();
+      servers("start", "api");
+    }
+  });
+
+  await scenario("26 semantic retrieval: an Indonesian question with no shared words finds the imported page by meaning", async () => {
+    await control("/__control/reset");
+    await control("/__control/script?name=pricing_id");
+    servers("start", "api", { EMBEDDINGS: "on" });
+    try {
+      const { context, page, problems } = await openSession(browser);
+      const banner = page.getByText("Connected to the Contexa API");
+      await banner.waitFor({ timeout: 10000 });
+      const bannerText = await banner.innerText();
+      assert(bannerText.includes("semantic search on fake-embed"), `banner: ${bannerText}`);
+      await page.getByRole("combobox", { name: "Speakers talk in" }).click();
+      await page.getByRole("option", { name: /Indonesian/ }).click();
+      await addLink(page, `${FAKE}/pages/notewave`);
+      await documentItem(page, "Notewave pricing and plans").getByText(/Ready · \d+ chunks?/).waitFor({ timeout: 15000 });
+      await page.getByText("searched by keyword and by meaning", { exact: false }).waitFor();
+      await chooseMicAndStart(page);
+      await status(page, "Live").waitFor({ timeout: 20000 });
+      await transcript(page).getByText("Berapa harga langganannya setiap bulan?").waitFor({ timeout: 20000 });
+      const copilot = page.getByRole("complementary", { name: "Response copilot" });
+      await copilot.getByText("Paket Pro harganya 8 dolar per bulan per pengguna.").first().waitFor({ timeout: 20000 });
+      const evidence = await copilot.innerText();
+      // The question shares no word with the English page, and the analysis gave no keywords.
+      assert(evidence.includes("Notewave pricing and plans · Plans"), `evidence: ${evidence}`);
+      await page.getByRole("button", { name: "Stop session" }).click();
+      const log = await fakeLog();
+      const analysis = log.llm.filter((c) => c.name === "turn_analysis");
+      assert(analysis.length === 1, `analysis calls: ${analysis.length}`);
+      // One call for the page's chunks, one for the question.
+      assert(log.embeddings.length >= 2 && log.embeddings.every((e) => e.model === "fake-embed"), JSON.stringify(log.embeddings));
+      assert(problems.length === 0, problems.join("; "));
+      await context.close();
+      return `${log.embeddings.length} embedding calls (${log.embeddings.map((e) => e.inputs).join(", ")} inputs)`;
+    } finally {
+      servers("start", "api");
+    }
+  });
+
+  await scenario("27 history: a finished session is saved with its recap, found by meaning, opened at the turn, exported, and deleted", async () => {
+    if (!process.env.E2E_DATABASE_URL) skip("set E2E_DATABASE_URL to a Postgres with pgvector");
+    await control("/__control/reset");
+    servers("start", "api", { HISTORY: "on", EMBEDDINGS: "on" });
+    const contexts = [];
+    try {
+      const { context, page, problems } = await openSession(browser);
+      contexts.push(context);
+      await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+      const title = `Demo day ${Date.now().toString(36)}`;
+      await page.getByLabel("Session name").fill(title);
+      const saveSwitch = page.getByRole("switch", { name: "Save to history" });
+      await saveSwitch.waitFor();
+      assert((await saveSwitch.getAttribute("aria-checked")) === "true", "Save to history should be on by default");
+      await page.getByRole("button", { name: "Load sample project docs" }).click();
+      await page.getByText(/Ready · \d+ chunks?/).nth(1).waitFor({ timeout: 15000 });
+      await chooseMicAndStart(page);
+      await status(page, "Live").waitFor({ timeout: 20000 });
+      await page.getByText("We use optimistic locking with a version column.").waitFor({ timeout: 20000 });
+      await page.getByRole("button", { name: "Stop session" }).click();
+      await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
+      // Saved on its own once the recap is written.
+      const notice = page.getByRole("status", { name: "History" });
+      await notice.getByText("Saved to history").waitFor({ timeout: 15000 });
+      await notice.getByRole("link", { name: "Open" }).click();
+      await page.waitForURL(/\/history\?id=/);
+      await page.getByRole("heading", { name: title }).waitFor({ timeout: 10000 });
+      const recap = await page.getByRole("region", { name: "Recap" }).innerText();
+      assert(recap.includes("Tim membahas cara Notewave"), `recap: ${recap}`);
+      const saved = await transcript(page).innerText();
+      assert(saved.includes(QUESTION) && saved.includes("Selamat datang kembali"), `transcript: ${saved.slice(0, 200)}`);
+      assert(saved.includes("We use optimistic locking with a version column.") && saved.includes("notewave-architecture.md · Conflict handling"), `answer: ${saved}`);
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        page.getByRole("button", { name: "Export .md" }).click(),
+      ]);
+      const exported = fs.readFileSync(await download.path(), "utf8");
+      assert(exported.includes(`# ${title}`) && exported.includes("## Recap") && exported.includes("Evidence: notewave-architecture.md · Conflict handling"), exported.slice(0, 400));
+      // The list, then a search in other words and another language.
+      await page.getByRole("link", { name: "All sessions" }).click();
+      await page.getByRole("list", { name: "Saved sessions" }).getByText(title).waitFor({ timeout: 10000 });
+      await page.getByRole("searchbox", { name: "Search every session, by meaning" }).fill("konflik saat edit bersamaan");
+      await page.getByRole("button", { name: "Search", exact: true }).click();
+      const results = page.getByRole("region", { name: "Search results" });
+      await results.getByText("By meaning and words").waitFor({ timeout: 10000 });
+      const hit = results.getByRole("link").filter({ hasText: title }).filter({ hasText: "Transcript" }).filter({ hasText: QUESTION }).first();
+      await hit.click();
+      await page.waitForURL(/[?&]turn=/);
+      const turnId = new URL(page.url()).searchParams.get("turn");
+      const turn = page.locator(`[id="turn-${turnId}"]`);
+      await turn.waitFor({ timeout: 10000 });
+      assert((await turn.innerText()).includes(QUESTION), `opened turn: ${await turn.innerText()}`);
+      const inView = await turn.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        return box.top >= 0 && box.bottom <= window.innerHeight;
+      });
+      assert(inView, "the turn should be scrolled into view");
+      // Another browser has another device key, so it can't see this session.
+      const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      contexts.push(other);
+      const otherPage = await other.newPage();
+      await otherPage.goto("http://localhost:3000/history");
+      await otherPage.getByText("No saved sessions yet").waitFor({ timeout: 10000 });
+      // Delete, with a confirmation.
+      await page.getByRole("button", { name: "Delete", exact: true }).click();
+      await page.getByRole("button", { name: "Delete session" }).click();
+      await page.waitForURL((url) => url.pathname === "/history" && !url.search);
+      await page.getByText("No saved sessions yet").waitFor({ timeout: 10000 });
+      assert(problems.length === 0, problems.join("; "));
+      return `saved, found by meaning (turn ${turnId}), exported ${exported.length} chars, deleted`;
+    } finally {
+      for (const context of contexts) await context.close();
+      servers("start", "api");
+    }
+  });
+
+  await scenario("28 history off: no save switch, and the history page says what to configure", async () => {
+    servers("start", "api", { HISTORY: "off" });
+    try {
+      const { context, page, problems } = await openSession(browser);
+      await page.getByText("Connected to the Contexa API").waitFor({ timeout: 10000 });
+      const switches = await page.getByRole("switch", { name: "Save to history" }).count();
+      assert(switches === 0, "no Save to history switch without a database");
+      await page.goto("http://localhost:3000/history");
+      await page.getByText("History isn't set up on this server").waitFor({ timeout: 10000 });
+      const text = await page.getByRole("status").filter({ hasText: "History isn't set up" }).innerText();
+      assert(text.includes("DATABASE_URL"), text);
+      // The browser logs the 503 itself; only script errors count.
+      const unexpected = problems.filter((p) => !/status of 503/.test(p));
+      assert(unexpected.length === 0, unexpected.join("; "));
+      await context.close();
+    } finally {
+      servers("start", "api");
+    }
+  });
+
+  await scenario("29 floating window: pops out while live with the latest turns and the ready-to-say answer", async () => {
+    await control("/__control/reset");
+    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    await context.grantPermissions(["microphone"], { origin: "http://localhost:3000" });
+    await context.addInitScript(() => {
+      // Document Picture-in-Picture, played by an ordinary popup window.
+      window.documentPictureInPicture = {
+        window: null,
+        requestWindow: async ({ width, height } = {}) => window.open("", "_blank", `width=${width},height=${height}`),
+      };
+      window.__spoken = [];
+      const synth = {
+        speaking: false,
+        getVoices: () => [],
+        cancel() { this.current?.onend?.(); this.current = null; },
+        speak(utterance) { this.current = utterance; window.__spoken.push({ text: utterance.text, lang: utterance.lang }); },
+      };
+      Object.defineProperty(window, "speechSynthesis", { value: synth, configurable: true });
+      window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; this.lang = ""; } };
+    });
+    const page = await context.newPage();
+    const problems = [];
+    page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
+    await page.goto(APP);
+    await page.getByRole("button", { name: "Load sample project docs" }).click();
+    await page.getByText(/Ready · \d+ chunks?/).nth(1).waitFor({ timeout: 15000 });
+    assert((await page.getByRole("button", { name: "Pop out" }).count()) === 0, "Pop out shows while live only");
+    await chooseMicAndStart(page);
+    await status(page, "Live").waitFor({ timeout: 20000 });
+    const [popup] = await Promise.all([
+      page.waitForEvent("popup"),
+      page.getByRole("button", { name: "Pop out" }).click(),
+    ]);
+    const floating = popup.getByRole("region", { name: "Floating copilot" });
+    await floating.waitFor({ timeout: 10000 });
+    await floating.getByText(QUESTION, { exact: false }).waitFor({ timeout: 20000 });
+    await floating.getByText("Bagaimana aplikasi Anda menangani concurrent updates", { exact: false }).waitFor({ timeout: 20000 });
+    const answer = floating.getByRole("region", { name: "Ready to say" });
+    await answer.getByText("We use optimistic locking with a version column.").waitFor({ timeout: 20000 });
+    // The app's styles came along: the answer panel has the primary tint, not a bare page.
+    const styled = await popup.evaluate(() => {
+      const box = document.querySelector('[aria-label="Ready to say"]');
+      return document.styleSheets.length > 0 && getComputedStyle(box).borderTopWidth === "1px";
+    });
+    assert(styled, "the floating window should carry the app's stylesheets");
+    await answer.getByRole("button", { name: "Listen" }).click();
+    const spoken = await page.evaluate(() => window.__spoken);
+    assert(spoken.at(-1)?.text === "We use optimistic locking with a version column.", JSON.stringify(spoken));
+    await answer.getByRole("button", { name: "Stop" }).click();
+    // Closing the window resets the button.
+    assert((await page.getByRole("button", { name: "Close pop-out" }).getAttribute("aria-pressed")) === "true", "button state while open");
+    await popup.close();
+    await page.getByRole("button", { name: "Pop out" }).waitFor({ timeout: 5000 });
+    await page.getByRole("button", { name: "Stop session" }).click();
+    await page.getByRole("region", { name: "Recap" }).getByText("Tim membahas", { exact: false }).waitFor({ timeout: 15000 });
+    assert(problems.length === 0, problems.join("; "));
+    await context.close();
+    return `popup showed the question, its translation, and the answer; Listen spoke ${spoken.at(-1).lang}`;
+  });
+
   await browser.close();
+  const skipped = results.filter((r) => r.skipped).length;
   const failed = results.filter((r) => !r.ok);
-  console.log(`\n${results.length - failed.length}/${results.length} passed`);
+  const ran = results.length - skipped;
+  console.log(`\n${ran - failed.length}/${ran} passed${skipped ? `, ${skipped} skipped` : ""}`);
   process.exit(failed.length ? 1 : 0);
 })();

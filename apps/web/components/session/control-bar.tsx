@@ -20,6 +20,7 @@ import { SPEECH_MODELS, speechModelFor } from "@/lib/languages";
 import { isSessionActive } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
 
+import { PopOutButton } from "./floating-window";
 import { useSession } from "./session-store-provider";
 
 export function ControlBar() {
@@ -64,6 +65,7 @@ export function ControlBar() {
       <AudioReadout className="hidden md:flex" />
 
       <div className="ml-auto flex items-center gap-2">
+        <PopOutButton live={running} />
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

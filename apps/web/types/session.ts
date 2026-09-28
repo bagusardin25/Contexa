@@ -28,6 +28,8 @@ export interface SessionConfig {
   speakerLabels: boolean;
   /** How suggested answers sound. */
   answerStyle: AnswerStyle;
+  /** Save the finished session to the meeting history (when the API has one). */
+  saveHistory: boolean;
 }
 
 export type SessionErrorCode =
@@ -220,6 +222,13 @@ export type RecapState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; recap: SessionRecap; language: LanguageCode }
+  | { status: "failed"; message: string };
+
+/** Saving the finished session to the meeting history. */
+export type HistoryState =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "saved"; meetingId: string }
   | { status: "failed"; message: string };
 
 /** What the recap is written from: the transcript the browser holds. */

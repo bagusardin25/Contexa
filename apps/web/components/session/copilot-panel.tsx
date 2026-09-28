@@ -388,7 +388,7 @@ const SPEECH_LOCALES: Record<string, string> = { id: "id-ID", en: "en-US", ja: "
 const subscribeNever = () => () => {};
 
 /** Reads the ready-to-say answer aloud with the browser's own voices (Web Speech API). */
-function ListenButton({ text, language }: { text: string | null; language: string }) {
+export function ListenButton({ text, language }: { text: string | null; language: string }) {
   const supported = useSyncExternalStore(
     subscribeNever,
     () => "speechSynthesis" in window,

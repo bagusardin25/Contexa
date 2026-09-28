@@ -158,7 +158,7 @@ function LinkImport({ disabled }: { disabled: boolean }) {
           value={link}
           disabled={disabled}
           onChange={(event) => setLink(event.target.value)}
-          placeholder="Paste a link to a page, PDF, or GitHub repo"
+          placeholder="Page, PDF, or GitHub link"
           aria-label="Document link"
           className="h-8 min-w-0 text-xs"
         />
@@ -276,7 +276,7 @@ function statusLabel(doc: ContextDocument) {
     case "ready":
       return `Ready · ${pluralize(doc.chunkCount ?? 0, "chunk")}`;
     case "failed":
-      return "Couldn't process this file";
+      return doc.sourceUrl ? "Couldn't import this link" : "Couldn't process this file";
   }
 }
 

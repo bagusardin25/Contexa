@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     # Local testing only: lets imports reach localhost and private networks.
     import_allow_private_hosts: bool = False
 
+    # Meeting history in Postgres with pgvector (Supabase or any Postgres). Empty = off.
+    database_url: SecretStr | None = None
+    # The Supabase project URL and publishable (anon) key, the same values as the web app's
+    # NEXT_PUBLIC_SUPABASE_*: used only to check who is signed in when saving history.
+    supabase_url: str = ""
+    supabase_anon_key: SecretStr | None = None
+
     llm_timeout_seconds: float = Field(15.0, gt=0)
     llm_temperature: float | None = 0.2
     # For reasoning models (gpt-oss, Gemini 2.5, o-series): "low" answers faster and spends

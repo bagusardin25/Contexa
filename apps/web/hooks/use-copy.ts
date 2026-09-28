@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-/** Copies text to the clipboard and exposes a short-lived `copied` flag. */
-export function useCopy(resetAfterMs = 1600) {
+/**
+ * Copies text to the clipboard and exposes a short-lived `copied` flag. `target` is the
+ * window the click happens in: a floating (picture-in-picture) window has the focus, and
+ * the clipboard only accepts writes from the focused document.
+ */
+export function useCopy(resetAfterMs = 1600, target?: Window | null) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
 
@@ -18,7 +22,7 @@ export function useCopy(resetAfterMs = 1600) {
   const copy = useCallback(
     async (text: string, successMessage?: string) => {
       try {
-        await navigator.clipboard.writeText(text);
+        await (target ?? window).navigator.clipboard.writeText(text);
       } catch {
         toast.error("Couldn't copy — your browser blocked clipboard access.");
         return false;
@@ -29,7 +33,7 @@ export function useCopy(resetAfterMs = 1600) {
       timer.current = window.setTimeout(() => setCopied(false), resetAfterMs);
       return true;
     },
-    [resetAfterMs],
+    [resetAfterMs, target],
   );
 
   return { copied, copy };

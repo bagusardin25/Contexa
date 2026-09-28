@@ -6,6 +6,7 @@ import {
   AudioLinesIcon,
   ChevronDownIcon,
   FlaskConicalIcon,
+  HistoryIcon,
   LanguagesIcon,
   RadioIcon,
   ShieldAlertIcon,
@@ -36,6 +37,7 @@ import {
   speakerLanguageOption,
 } from "@/lib/languages";
 import { LIVE_AVAILABLE, openLive } from "@/lib/session/mode";
+import { isSessionActive } from "@/lib/session/store";
 import { cn } from "@/lib/utils";
 
 import { useIsPreview, useSession } from "./session-store-provider";
@@ -62,10 +64,25 @@ export function SessionHeader() {
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
         <SessionRoute className="hidden md:inline-flex" />
         {isPreview ? <PreviewMenu /> : null}
+        {LIVE_AVAILABLE ? <HistoryLink /> : null}
         <ThemeToggle />
         <UserMenu />
       </div>
     </header>
+  );
+}
+
+/** Hidden while a session runs: leaving the page ends the stream. */
+function HistoryLink() {
+  const active = useSession((state) => isSessionActive(state.status));
+  if (active) return null;
+  return (
+    <Button asChild variant="ghost" size="sm" className="h-8 gap-1.5 text-xs">
+      <Link href="/history">
+        <HistoryIcon className="size-3.5" />
+        <span className="hidden sm:inline">History</span>
+      </Link>
+    </Button>
   );
 }
 
