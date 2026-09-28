@@ -11,7 +11,7 @@ services:
     healthCheckPath: /health
     # Only the API's own files trigger a redeploy.
     buildFilter:
-      paths:
+      include:
         - apps/api/**
     envVars:
       - key: ASSEMBLYAI_API_KEY

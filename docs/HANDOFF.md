@@ -39,7 +39,9 @@ Commits on `claude/finish-contexa`, oldest first:
 | `5713801` | Meeting history: API (`/api/meetings*`, Supabase or device identity), web (`/history`, auto-save, Save to history switch), tests, scenarios 27-28, smoke test checks the DB |
 | `8d5c0a0` | Pop-out floating window (Document PiP), scenario 29 |
 | `765c3a8` | Shorter link placeholder |
-| (next) | Docs for every new setting; deploy files (`apps/api/Dockerfile`, `render.yaml`, `docs/DEPLOY.md`) |
+| `fa6faad` | Docs for every new setting (READMEs, `.env.example`, `e2e/README.md`, this file) |
+| `cf75b5f` | Deploy files: `apps/api/Dockerfile`, `render.yaml`, `docs/DEPLOY.md` |
+| `aca5f26` | The API log says why history is off (password redacted) |
 
 ### Verified with fakes (no real keys)
 
