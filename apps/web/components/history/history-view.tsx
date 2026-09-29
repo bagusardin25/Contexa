@@ -34,6 +34,7 @@ import {
   historyApi,
 } from "@/lib/history/client";
 import { historyHeaders } from "@/lib/history/identity";
+import { isAuthConfigured } from "@/lib/supabase/config";
 import { cn } from "@/lib/utils";
 
 import { MeetingView } from "./meeting-view";
@@ -176,7 +177,9 @@ function MeetingBrowser() {
         <p className="text-sm text-muted-foreground">
           {list.status === "ready" && list.value.signedIn
             ? "Sessions saved to your account."
-            : "Sessions saved in this browser. Sign in to keep them with your account."}{" "}
+            : isAuthConfigured
+              ? "Sessions saved in this browser. Sign in to keep them with your account."
+              : "Sessions saved in this browser."}{" "}
           Transcripts, translations, answers, and recaps; never the audio.
         </p>
       </div>
