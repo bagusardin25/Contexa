@@ -1,167 +1,206 @@
 import Link from "next/link";
 import {
-  AppWindowIcon,
+  ArrowDownIcon,
   ArrowRightIcon,
   AudioLinesIcon,
-  EarIcon,
+  CheckIcon,
   FileSearchIcon,
   FileTextIcon,
   HandIcon,
   LanguagesIcon,
   MessageSquareQuoteIcon,
+  PlayIcon,
   ShieldCheckIcon,
+  SparklesIcon,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import { LiveTurnDemo } from "./live-turn-demo";
-import { SectionIntro, Tag } from "./primitives";
-
-/** Facts from lib/languages.ts and lib/documents/validate.ts. */
-const FACTS: { term: string; tags: { short: string; name?: string }[]; more?: string }[] = [
-  {
-    term: "Hears",
-    tags: [
-      { short: "EN", name: "English" },
-      { short: "JA", name: "Japanese" },
-      { short: "ID", name: "Indonesian" },
-    ],
-    more: "and more",
-  },
-  {
-    term: "Translates into",
-    tags: [
-      { short: "ID", name: "Indonesian" },
-      { short: "EN", name: "English" },
-      { short: "JA", name: "Japanese" },
-    ],
-  },
-  {
-    term: "Grounded in",
-    tags: [{ short: "PDF" }, { short: "DOCX" }, { short: "MD", name: "Markdown" }, { short: "TXT" }],
-  },
-];
+import { SectionIntro } from "./primitives";
 
 export function Hero() {
   return (
-    <section className="relative isolate overflow-hidden">
-      <div
-        aria-hidden
-        className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_60%_55%_at_50%_-10%,color-mix(in_oklab,var(--primary)_20%,transparent),transparent)]"
-      />
-      <div
-        aria-hidden
-        className="absolute inset-0 -z-10 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [mask-image:radial-gradient(ellipse_70%_60%_at_50%_0%,black,transparent)] [background-size:48px_48px] opacity-60"
-      />
-      <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 pt-12 pb-16 sm:px-6 sm:pt-14 lg:grid-cols-[1.05fr_1fr] lg:pt-20 lg:pb-24">
-        <div>
-          <Badge variant="ai" className="mb-5">
-            <AudioLinesIcon />
-            Real-time speech by AssemblyAI
-          </Badge>
-          <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl lg:text-[3.35rem] lg:leading-[1.05]">
-            Translation tells you what was said.{" "}
-            <span className="bg-linear-to-r from-indigo-600 via-violet-600 to-cyan-600 bg-clip-text text-transparent dark:from-indigo-400 dark:via-violet-400 dark:to-cyan-400">
-              Contexa helps you participate.
-            </span>
-          </h1>
-          <p className="mt-5 max-w-xl text-base text-muted-foreground text-pretty sm:text-lg">
-            A live copilot for webinars and meetings in another language. It transcribes speech as
-            it happens, translates every turn, and when someone asks you a question, drafts a
-            grounded answer from your own documents, ready to say in their language.
+    <section className="landing-hero">
+      <div className="landing-container hero-grid">
+        <div className="hero-copy">
+          <p className="landing-eyebrow">
+            <span className="eyebrow-line" /> YOUR REAL-TIME CONVERSATION COPILOT
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <Button asChild size="lg">
+          <h1>
+            Good ideas.
+            <br />
+            Any language.
+            <br />
+            <span>Your voice.</span>
+          </h1>
+          <p className="hero-description">
+            Follow the conversation. Find the right words. Contexa translates live speech and helps you answer
+            with confidence, using your own documents.
+          </p>
+          <div className="hero-actions">
+            <Button asChild size="lg" className="landing-primary">
               <Link href="/session">
-                Start a session
-                <ArrowRightIcon />
+                Start a session <ArrowRightIcon />
               </Link>
             </Button>
-            <Button asChild size="lg" variant="outline">
-              <a href="#how-it-works">See how it works</a>
+            <Button asChild size="lg" variant="outline" className="landing-secondary">
+              <Link href="/session?preview">
+                <PlayIcon /> Explore the demo
+              </Link>
             </Button>
           </div>
-          <dl className="mt-10 grid max-w-xl gap-3 border-t pt-6 sm:grid-cols-3 sm:gap-6">
-            {FACTS.map((fact) => (
-              <div key={fact.term} className="flex items-center justify-between gap-4 sm:block">
-                <dt className="text-xs text-muted-foreground">{fact.term}</dt>
-                <dd className="flex flex-wrap items-center justify-end gap-1 sm:mt-2 sm:justify-start">
-                  {fact.tags.map((tag) => (
-                    <Tag key={tag.short}>
-                      {tag.name ? (
-                        <>
-                          <span aria-hidden>{tag.short}</span>
-                          <span className="sr-only">{tag.name}</span>
-                        </>
-                      ) : (
-                        tag.short
-                      )}
-                    </Tag>
-                  ))}
-                  {fact.more ? (
-                    <span className="ml-0.5 text-xs text-muted-foreground">{fact.more}</span>
-                  ) : null}
-                </dd>
-              </div>
-            ))}
-          </dl>
+          <p className="hero-note">
+            <CheckIcon aria-hidden /> No account needed <span aria-hidden>·</span> You choose when to listen
+          </p>
+          <a className="hero-discover" href="#how-it-works">
+            <span>
+              <ArrowDownIcon aria-hidden />
+            </span>{" "}
+            A little context. A better conversation.
+          </a>
         </div>
-        <LiveTurnDemo />
+        <div className="demo-stage">
+          <div className="demo-stage-heading">
+            <span>
+              <SparklesIcon aria-hidden /> A conversation, connected.
+            </span>
+            <span className="demo-example-label">INTERACTIVE EXAMPLE</span>
+          </div>
+          <LiveTurnDemo />
+          <div className="demo-stage-flow" aria-hidden>
+            <span>Listen</span>
+            <span className="flow-line" />
+            <span>Understand</span>
+            <span className="flow-line" />
+            <span>Respond</span>
+          </div>
+        </div>
+      </div>
+      <div className="landing-container capability-strip">
+        <p>
+          Built for the moments
+          <br />
+          <strong>you want to be heard.</strong>
+        </p>
+        <div>
+          <AudioLinesIcon aria-hidden />
+          <span>
+            Live transcription
+            <small>AssemblyAI Universal-3.5 Pro Realtime, with speaker labels</small>
+          </span>
+        </div>
+        <div>
+          <LanguagesIcon aria-hidden />
+          <span>
+            Across languages<small>Read in Indonesian, English, or Japanese</small>
+          </span>
+        </div>
+        <div>
+          <FileSearchIcon aria-hidden />
+          <span>
+            Your context, included<small>Answers grounded in your documents</small>
+          </span>
+        </div>
       </div>
     </section>
   );
 }
 
-const GAPS = [
+const BENEFITS = [
   {
-    icon: EarIcon,
-    title: "Comprehension gap",
-    body: "Fast, accented speech in another language is hard to follow while it is happening.",
-    fix: "Every finished turn is transcribed and translated into your language as the session runs.",
+    icon: AudioLinesIcon,
+    label: "FOLLOW ALONG",
+    title: "Stay with the conversation.",
+    body: "Live transcripts and turn-by-turn translations help you keep up, even when the conversation moves fast.",
+    type: "transcript",
   },
   {
     icon: FileSearchIcon,
-    title: "Context gap",
-    body: "Generic translators don't know your project, your terminology, or the documents you brought.",
-    fix: "Answers come from the documents you attach, with the passages they used.",
+    label: "BRING YOUR CONTEXT",
+    title: "Answers with a foundation.",
+    body: "Add your project docs. Get suggestions grounded in their contents, with source passages you can inspect.",
+    type: "sources",
   },
   {
     icon: MessageSquareQuoteIcon,
-    title: "Response gap",
-    body: "Even when you know the answer, phrasing it in their language takes time a live Q&A doesn't give you.",
-    fix: "You get a ready-to-say reply in the speaker's language, next to your own.",
+    label: "FIND YOUR WORDS",
+    title: "Be ready for your turn.",
+    body: "When a question comes your way, get a draft in your language and a ready-to-say reply in theirs.",
+    type: "answer",
   },
 ];
 
 export function Problem() {
   return (
-    <section id="problem" className="scroll-mt-14 border-y bg-muted/30">
-      <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
-        <SectionIntro
-          eyebrow="The problem"
-          title="You understand the topic. The language gets in the way."
-          body="Students, junior developers, and hackathon teams often know the answer but can't follow or respond fast enough when the session is in English or Japanese."
-        />
-        <ol className="mt-12 grid divide-y border-y md:grid-cols-3 md:divide-x md:divide-y-0">
-          {GAPS.map((gap, index) => (
-            <li key={gap.title} className="flex flex-col py-8 md:px-6 md:first:pl-0 md:last:pr-0 lg:px-8">
-              <div className="flex items-center gap-3 text-muted-foreground">
-                <gap.icon className="size-5" aria-hidden />
-                <span className="font-mono text-xs">0{index + 1}</span>
+    <section id="problem" className="landing-section benefits-section">
+      <div className="landing-container">
+        <div className="section-heading-row">
+          <SectionIntro
+            eyebrow="MORE THAN TRANSLATION"
+            title={"You know the topic.\nNow join the conversation."}
+            body="For the webinar question, the project demo, and the meeting where your ideas deserve to be heard."
+          />
+          <span className="section-side-note">
+            Less searching for words.
+            <br />
+            More space for your ideas.
+          </span>
+        </div>
+        <div className="benefit-grid">
+          {BENEFITS.map((item, index) => (
+            <article className={`benefit-card benefit-${item.type}`} key={item.type}>
+              <div className="benefit-card-top">
+                <item.icon aria-hidden />
+                <span>0{index + 1}</span>
               </div>
-              <h3 className="mt-4 text-lg font-semibold tracking-tight">{gap.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{gap.body}</p>
-              <div className="mt-auto pt-6">
-                <p className="flex items-center gap-1.5 text-xs font-medium text-primary">
-                  <ArrowRightIcon className="size-3.5" aria-hidden />
-                  With Contexa
-                </p>
-                <p className="mt-1.5 text-sm leading-relaxed">{gap.fix}</p>
+              <p className="benefit-label">{item.label}</p>
+              <h3>{item.title}</h3>
+              <p className="benefit-body">{item.body}</p>
+              <div className="benefit-artifact">
+                {item.type === "transcript" ? (
+                  <>
+                    <p className="artifact-label">EXAMPLE TRANSLATION</p>
+                    <p>
+                      <span className="language-code">EN</span> Let’s talk about your project.
+                    </p>
+                    <p lang="id">
+                      <span className="language-code">ID</span> Mari bahas proyek Anda.
+                    </p>
+                  </>
+                ) : null}
+                {item.type === "sources" ? (
+                  <>
+                    <p className="artifact-label">YOUR KNOWLEDGE, CONNECTED</p>
+                    <div className="source-file">
+                      <FileTextIcon aria-hidden />
+                      <span>
+                        architecture.pdf<small>Source passage · page 4</small>
+                      </span>
+                      <CheckIcon aria-hidden />
+                    </div>
+                    <div className="source-file">
+                      <FileTextIcon aria-hidden />
+                      <span>
+                        README.md<small>Source passage · Realtime sync</small>
+                      </span>
+                      <CheckIcon aria-hidden />
+                    </div>
+                  </>
+                ) : null}
+                {item.type === "answer" ? (
+                  <>
+                    <p className="artifact-label">
+                      <SparklesIcon aria-hidden /> EXAMPLE · READY TO SAY
+                    </p>
+                    <blockquote>“We use optimistic locking to keep everyone’s changes in sync.”</blockquote>
+                    <p className="artifact-footnote">A starting point. Always yours to review.</p>
+                  </>
+                ) : null}
               </div>
-            </li>
+            </article>
           ))}
-        </ol>
+        </div>
       </div>
     </section>
   );
@@ -170,39 +209,49 @@ export function Problem() {
 const PRINCIPLES = [
   {
     icon: HandIcon,
-    title: "You stay in control",
-    body: "Contexa suggests; you decide what to say. It never speaks or joins a meeting on your behalf.",
+    title: "Your voice. Your call.",
+    body: "Review every suggestion and decide what to say. Contexa never joins or speaks in a meeting on your behalf.",
   },
   {
     icon: FileSearchIcon,
-    title: "Evidence you can inspect",
-    body: "Every answer lists the passages it came from, and says so plainly when your documents don't cover a question.",
+    title: "See where answers come from.",
+    body: "Inspect the supporting passages. When your documents don’t cover a question, Contexa tells you.",
   },
   {
     icon: ShieldCheckIcon,
-    title: "Private by default",
-    body: "API keys stay on the server, audio is never stored, and nothing is captured until you press Start.",
+    title: "Listening starts with you.",
+    body: "Choose your audio source and press Start. You can stop the session whenever you need to.",
   },
 ];
 
 export function Principles() {
   return (
-    <section id="principles" className="scroll-mt-14 border-y bg-muted/30">
-      <div className="mx-auto grid max-w-6xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)] lg:gap-16 lg:py-20">
-        <SectionIntro
-          eyebrow="Principles"
-          title="A copilot, not an impersonator"
-          body="Contexa helps you understand and respond. You remain responsible for what is said."
-        />
-        <ul className="divide-y border-y">
-          {PRINCIPLES.map((principle) => (
-            <li key={principle.title} className="flex gap-4 py-6">
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-full border bg-background text-primary">
-                <principle.icon className="size-4" aria-hidden />
-              </span>
+    <section id="principles" className="landing-section principles-section">
+      <div className="landing-container principles-grid">
+        <div>
+          <p className="landing-eyebrow">BUILT AROUND YOU</p>
+          <h2>
+            A little assistance.
+            <br />
+            <span>All your agency.</span>
+          </h2>
+          <p className="principles-description">
+            Confidence comes from understanding your answer, knowing its source, and making it your own.
+          </p>
+          <div className="principles-signature">
+            <span aria-hidden>
+              <AudioLinesIcon />
+            </span>{" "}
+            Your context. Your language. Your voice.
+          </div>
+        </div>
+        <ul>
+          {PRINCIPLES.map((item) => (
+            <li key={item.title}>
+              <item.icon aria-hidden />
               <div>
-                <h3 className="font-semibold">{principle.title}</h3>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{principle.body}</p>
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
               </div>
             </li>
           ))}
@@ -212,63 +261,76 @@ export function Principles() {
   );
 }
 
-/** What a first session needs, from the setup screen and upload rules. */
-const CHECKLIST = [
+const QUESTIONS = [
   {
-    icon: AppWindowIcon,
-    title: "A tab with audio, or your microphone",
-    body: "Webinars, YouTube, and web meetings. Tab audio works in Chrome and Edge.",
+    question: "Can I try Contexa without a live meeting?",
+    answer:
+      "Yes. Explore the demo to try a scripted session with sample documents. It doesn’t capture audio or require a live meeting. Start a regular session when you’re ready to use your own audio.",
   },
   {
-    icon: FileTextIcon,
-    title: "Your documents, if you have them",
-    body: "PDF, DOCX, Markdown, or TXT, up to 10 MB each and 10 per session.",
+    question: "What do I need to start?",
+    answer:
+      "Choose your microphone, a recording, or a browser tab with audio. For tab audio, use Chrome or Edge and enable Share tab audio. You can start without an account and add documents for grounded answer suggestions.",
   },
   {
-    icon: LanguagesIcon,
-    title: "The language you read best",
-    body: "Follow along in Bahasa Indonesia, English, or 日本語. Answers default to the speaker's language.",
+    question: "Which languages can I follow along in?",
+    answer:
+      "Read translations in Bahasa Indonesia, English, or Japanese. Speech support depends on the language and speech model selected in session setup. Suggested replies default to the speaker’s language.",
+  },
+  {
+    question: "Can I use my own documents?",
+    answer:
+      "Yes. Add PDF, DOCX, Markdown, or TXT files, up to 10 MB each and 10 documents per session. You can also import a supported web page, PDF link, or GitHub repository. Review the cited passages before using a suggested answer.",
   },
 ];
 
+export function Faq() {
+  return (
+    <section id="faq" className="landing-section">
+      <div className="landing-container faq-grid">
+        <SectionIntro
+          eyebrow="A FEW THINGS TO KNOW"
+          title="Before you jump in."
+          body="A clearer picture of your first conversation with Contexa."
+        />
+        <div className="faq-list">
+          {QUESTIONS.map((item) => (
+            <details key={item.question}>
+              <summary>
+                {item.question}
+                <span aria-hidden>+</span>
+              </summary>
+              <p>{item.answer}</p>
+            </details>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function FinalCta() {
   return (
-    <section className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
-      <div className="grid overflow-hidden rounded-3xl border bg-card md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-        <div className="relative isolate flex flex-col justify-center px-6 py-10 sm:px-10 sm:py-12">
-          <div
-            aria-hidden
-            className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_80%_70%_at_0%_100%,color-mix(in_oklab,var(--primary)_14%,transparent),transparent)]"
-          />
-          <h2 className="text-3xl font-semibold tracking-tight text-balance">
-            Walk into your next webinar with a copilot
+    <section className="landing-container final-section">
+      <div className="final-cta">
+        <div>
+          <p className="landing-eyebrow">LET YOUR IDEAS DO THE TALKING</p>
+          <h2>
+            Your next conversation,
+            <br />
+            with a little more confidence.
           </h2>
-          <p className="mt-3 max-w-md text-muted-foreground text-pretty">
-            Attach your project docs, share the tab, and let Contexa handle the language while you
-            handle the ideas.
-          </p>
-          <div className="mt-8">
-            <Button asChild size="lg">
-              <Link href="/session">
-                Start a session
-                <ArrowRightIcon />
-              </Link>
-            </Button>
-          </div>
+          <p>Bring your documents. Pick your language. Join in.</p>
         </div>
-        <div className="border-t bg-muted/30 px-6 py-8 sm:px-10 sm:py-10 md:border-t-0 md:border-l">
-          <h3 className="text-sm font-semibold">What you need</h3>
-          <ul className="mt-5 space-y-5">
-            {CHECKLIST.map((item) => (
-              <li key={item.title} className="flex gap-3">
-                <item.icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-                <div>
-                  <p className="text-sm font-medium">{item.title}</p>
-                  <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">{item.body}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
+        <div className="final-actions">
+          <Button asChild size="lg" className="landing-primary">
+            <Link href="/session">
+              Start a session <ArrowRightIcon />
+            </Link>
+          </Button>
+          <Link className="final-demo-link" href="/session?preview">
+            Or explore the demo <ArrowRightIcon aria-hidden />
+          </Link>
         </div>
       </div>
     </section>

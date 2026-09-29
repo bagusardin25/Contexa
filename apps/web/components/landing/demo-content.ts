@@ -66,12 +66,3 @@ export const DEMO_SOURCES = [
   { name: "architecture.pdf", location: "p. 4" },
   { name: "README.md", location: "Realtime sync" },
 ];
-
-/** What a partial transcript of the English turn looks like mid-sentence. */
-export const DEMO_PARTIAL = DEMO_TURNS.en.chunks.slice(0, 6).join(" ");
-
-/** The bilingual answer, shortened for the "How it works" walkthrough. */
-export const DEMO_ANSWER = {
-  id: "Kami memakai optimistic locking. Setiap catatan punya kolom version, jadi kalau versinya sudah berubah, update ditolak dan klien menerapkan ulang editan pada data terbaru.",
-  en: "We use optimistic locking. Every note has a version column, so a conflicting write is rejected and the client re-applies the edit on the latest state.",
-};

@@ -1,6 +1,7 @@
 import { HowItWorks } from "@/components/landing/how-it-works";
-import { FinalCta, Hero, Principles, Problem } from "@/components/landing/sections";
+import { Faq, FinalCta, Hero, Principles, Problem } from "@/components/landing/sections";
 import { SiteFooter, SiteHeader } from "@/components/landing/site-header";
+import "./landing.css";
 
 export default function HomePage() {
   return (
@@ -17,6 +18,7 @@ export default function HomePage() {
         <Problem />
         <HowItWorks />
         <Principles />
+        <Faq />
         <FinalCta />
       </main>
       <SiteFooter />

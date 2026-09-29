@@ -6,43 +6,33 @@ import { Logo } from "@/components/brand/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 
-const NAV_LINKS = [
-  { href: "#problem", label: "Problem" },
-  { href: "#how-it-works", label: "How it works" },
-  { href: "#principles", label: "Principles" },
-];
+import { MobileNavigation } from "./mobile-navigation";
 
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/75 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:px-6 lg:gap-6">
-        <Link href="/" aria-label="Contexa home" className="rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+    <header className="landing-header">
+      <div className="landing-container header-inner">
+        <Link href="/" aria-label="Contexa home" className="header-logo">
           {/* The wordmark gives way on the narrowest phones so the header actions still fit. */}
           <Logo wordmarkClassName="max-[359px]:hidden" />
         </Link>
-        <nav aria-label="Main" className="hidden items-center gap-1 text-sm text-muted-foreground md:flex">
-          {NAV_LINKS.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              className="rounded-md px-2.5 py-1.5 transition-colors outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              {link.label}
-            </a>
-          ))}
+        <nav aria-label="Main" className="desktop-nav">
+          <a href="#problem">Why Contexa</a>
+          <a href="#how-it-works">How it works</a>
+          <a href="#principles">Our principles</a>
         </nav>
-        <div className="ml-auto flex items-center gap-2">
-          <Button asChild size="sm" variant="ghost" className="hidden sm:inline-flex">
+        <div className="header-actions">
+          <Button asChild size="sm" variant="ghost" className="header-history">
             <Link href="/history">History</Link>
           </Button>
           <ThemeToggle />
           <UserMenu />
-          <Button asChild size="sm">
+          <Button asChild size="sm" className="header-launch">
             <Link href="/session">
-              Launch app
-              <ArrowRightIcon />
+              Launch app <ArrowRightIcon />
             </Link>
           </Button>
+          <MobileNavigation />
         </div>
       </div>
     </header>
@@ -51,11 +41,25 @@ export function SiteHeader() {
 
 export function SiteFooter() {
   return (
-    <footer className="border-t">
-      <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:px-6">
-        <Logo wordmarkClassName="text-foreground" />
-        <p className="sm:ml-4">Built for the AssemblyAI Voice Agent Hackathon on lablab.ai.</p>
-        <p className="sm:ml-auto">Speech powered by AssemblyAI.</p>
+    <footer className="landing-footer">
+      <div className="landing-container">
+        <div className="footer-main">
+          <div>
+            <Link href="/" aria-label="Contexa home">
+              <Logo />
+            </Link>
+            <p>A little context. A world of conversation.</p>
+          </div>
+          <nav aria-label="Footer">
+            <a href="#how-it-works">How it works</a>
+            <a href="#faq">FAQ</a>
+            <Link href="/session">Open app</Link>
+          </nav>
+        </div>
+        <div className="footer-credit">
+          <p>Built for the AssemblyAI Voice Agent Hackathon on lablab.ai.</p>
+          <p>Speech powered by AssemblyAI.</p>
+        </div>
       </div>
     </footer>
   );
