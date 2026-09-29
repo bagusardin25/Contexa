@@ -286,4 +286,5 @@ Contexa/
 - [Web app](apps/web/README.md)
 - [Deployment on Render, Fly.io, and Supabase](docs/DEPLOY.md)
 
-Built by [@bagusardin25](https://github.com/bagusardin25).
+Built by Bagus Ardin Prayoga ([@bagusardin25](https://github.com/bagusardin25)), team
+lockin-zewu. Released under the [MIT License](LICENSE).
