@@ -77,10 +77,13 @@ function describe(error: unknown) {
   return "Something went wrong with the live session.";
 }
 
+/** AssemblyAI labels a turn it hasn't attributed yet "PENDING" (or "UNKNOWN"): no speaker. */
+const UNATTRIBUTED_SPEAKERS = new Set(["UNKNOWN", "PENDING"]);
+
 function normalizeSpeaker(label: unknown) {
   if (typeof label !== "string") return null;
   const trimmed = label.trim();
-  return trimmed && trimmed.toUpperCase() !== "UNKNOWN" ? trimmed.slice(0, 16) : null;
+  return trimmed && !UNATTRIBUTED_SPEAKERS.has(trimmed.toUpperCase()) ? trimmed.slice(0, 16) : null;
 }
 
 function normalizeLanguage(code: unknown) {
