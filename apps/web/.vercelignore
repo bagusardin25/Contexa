@@ -1,0 +1,6 @@
+# CLI deploys (vercel deploy): local settings and build output stay on this machine.
+# Production settings come from the Vercel project's environment variables.
+.env*
+!.env.example
+.next
+node_modules
