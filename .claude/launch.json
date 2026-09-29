@@ -8,6 +8,12 @@
       "port": 8000
     },
     {
+      "name": "api-stable",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--directory", "apps/api", "uvicorn", "app.main:app", "--port", "8000"],
+      "port": 8000
+    },
+    {
       "name": "web",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "apps/web"],
